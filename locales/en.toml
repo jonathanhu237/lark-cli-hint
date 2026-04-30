@@ -1,8 +1,0 @@
-# English UI strings for lch.
-# Keys are referenced from rendering code; structure mirrors hint output.
-
-[ui]
-sources = "Sources"
-next = "Next"
-error = "Error"
-hint = "Hint"

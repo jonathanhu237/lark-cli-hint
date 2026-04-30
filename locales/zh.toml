@@ -1,8 +1,0 @@
-# 中文 UI 文案
-# Keys 与渲染代码引用对应，结构对齐 hint 输出
-
-[ui]
-sources = "来源"
-next = "下一步"
-error = "错误"
-hint = "提示"
