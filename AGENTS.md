@@ -19,7 +19,7 @@ Do not drift into building:
 The first version has one primary entry point:
 
 ```bash
-lark-hint run -- lark-cli ...
+lark-cli-hint run -- lark-cli ...
 ```
 
 It has two user-visible capabilities:
@@ -40,13 +40,13 @@ docs/wiki search -> docs fetch -> suggest im push command
 The key Recover demo is wiki token / doc token confusion:
 
 ```bash
-lark-hint run -- lark-cli docs +fetch --doc-token wiki_xxx
+lark-cli-hint run -- lark-cli docs +fetch --doc-token wiki_xxx
 ```
 
 The key Next demo is:
 
 ```bash
-lark-hint run -- lark-cli docs +search --query "<project keyword>"
+lark-cli-hint run -- lark-cli docs +search --query "<project keyword>"
 ```
 
 which should suggest:
@@ -88,3 +88,17 @@ Prioritize deterministic handling for:
 - Preparing, but not executing, an `lark-cli im ...` push command.
 
 Use mocked fixtures when real Feishu access is unavailable. Mocking is acceptable for the contest demo as long as the behavior reflects real `lark-cli` command shapes and the hint cites its fixture source.
+
+## Technical Direction
+
+Use this stack for the first implementation:
+
+- Language/runtime: TypeScript on Node.js.
+- Package manager and tooling: pnpm, tsup, vitest, and tsx.
+- CLI framework: commander.
+- Package name and executable name: `lark-cli-hint`.
+- Architecture: a thin CLI shell over a core app library. Do not put analyzer logic directly inside commander handlers.
+- Execution model: human mode streams the wrapped `lark-cli` output to the terminal and then appends the Hint Card; `--json` mode emits one JSON envelope and does not intermix terminal prose.
+- i18n: default to English, switch to `zh-CN` when the user environment is Chinese, and allow explicit locale override later. JSON field names stay stable and English; user-facing values are localized.
+- Data files: YAML for human-maintained rules/config, JSON for locale files, and JSON/TXT for fixtures that mirror original `lark-cli` output.
+- LLM: do not introduce an LLM SDK in the MVP. Keep analyzer boundaries extensible so LLM/RAG can be added later.
