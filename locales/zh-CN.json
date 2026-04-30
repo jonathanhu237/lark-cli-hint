@@ -1,0 +1,31 @@
+{
+  "labels": {
+    "status": "状态",
+    "hint": "提示",
+    "next": "下一步",
+    "why": "原因",
+    "sources": "来源"
+  },
+  "baseline": {
+    "success": {
+      "status": "命令已成功完成。",
+      "hint": "当前命令还没有可用的领域提示规则。",
+      "why": "命令执行成功，但没有匹配到 Recover 或 Next 规则。"
+    },
+    "failure": {
+      "status": "命令失败，退出码为 {{exitCode}}。",
+      "hint": "当前命令还没有可用的领域恢复规则。",
+      "why": "命令执行失败，但捕获到的输出没有匹配到 Recover 规则。"
+    },
+    "noNext": "暂无可信的下一条命令。"
+  },
+  "sources": {
+    "exitCode": "退出码：{{exitCode}}",
+    "stdout": "已捕获 stdout",
+    "stderr": "已捕获 stderr",
+    "none": "未捕获证据"
+  },
+  "errors": {
+    "missingCommand": "缺少被包裹的命令。请在 -- 后提供命令，例如：lark-cli-hint run -- lark-cli --version"
+  }
+}

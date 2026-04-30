@@ -1,0 +1,31 @@
+{
+  "labels": {
+    "status": "Status",
+    "hint": "Hint",
+    "next": "Next",
+    "why": "Why",
+    "sources": "Sources"
+  },
+  "baseline": {
+    "success": {
+      "status": "Command completed successfully.",
+      "hint": "No domain-specific guidance is available for this command yet.",
+      "why": "The command exited successfully, but no Recover or Next rule matched."
+    },
+    "failure": {
+      "status": "Command failed with exit code {{exitCode}}.",
+      "hint": "No domain-specific recovery rule is available for this command yet.",
+      "why": "The command failed, but no Recover rule matched the captured output."
+    },
+    "noNext": "No confident next command."
+  },
+  "sources": {
+    "exitCode": "exit code: {{exitCode}}",
+    "stdout": "captured stdout",
+    "stderr": "captured stderr",
+    "none": "no evidence captured"
+  },
+  "errors": {
+    "missingCommand": "Missing wrapped command. Provide a command after --, for example: lark-cli-hint run -- lark-cli --version"
+  }
+}
