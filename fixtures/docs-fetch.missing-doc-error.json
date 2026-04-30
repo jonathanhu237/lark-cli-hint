@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "error": {
+    "type": "validation",
+    "message": "required flag(s) \"doc\" not set"
+  }
+}

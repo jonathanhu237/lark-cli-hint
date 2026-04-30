@@ -1,4 +1,12 @@
+import { analyzeDocsWorkflow } from "./docsWorkflow.js";
 import type { Hint, HintSource, RunCommandResult } from "./types.js";
+
+export function analyze(
+  result: RunCommandResult,
+  t: (key: string, values?: Record<string, string | number>) => string
+): Hint {
+  return analyzeDocsWorkflow(result, t) ?? analyzeBaseline(result, t);
+}
 
 export function analyzeBaseline(
   result: RunCommandResult,

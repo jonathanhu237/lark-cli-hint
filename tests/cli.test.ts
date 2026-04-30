@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,6 +37,14 @@ function runCli(args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv
       }
     );
   });
+}
+
+async function createFakeLarkCli(script: string): Promise<string> {
+  const directory = await mkdtemp(resolve(tmpdir(), "fake-lark-cli-"));
+  const executable = resolve(directory, "lark-cli");
+  await writeFile(executable, `#!/usr/bin/env node\n${script}\n`);
+  await chmod(executable, 0o755);
+  return directory;
 }
 
 describe("lark-cli-hint CLI", () => {
@@ -139,5 +147,67 @@ describe("lark-cli-hint CLI", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("from-stdin");
     expect(result.stdout.indexOf("Status")).toBeGreaterThan(result.stdout.indexOf("from-stdin"));
+  });
+
+  it("emits docs workflow JSON hints through the CLI entry", async () => {
+    const fakeBin = await createFakeLarkCli(`
+const [, , domain, operation] = process.argv;
+if (domain === "docs" && operation === "+search") {
+  process.stdout.write(JSON.stringify({
+    ok: true,
+    data: {
+      items: [{ title: "CLI Fixture Doc", doc_token: "doccn_cli_fixture" }]
+    }
+  }));
+  process.exit(0);
+}
+process.stderr.write("unexpected command");
+process.exit(1);
+`);
+
+    const result = await runCli(
+      ["run", "--json", "--", "lark-cli", "docs", "+search", "--query", "demo"],
+      {
+        env: {
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          LANG: "en_US.UTF-8"
+        }
+      }
+    );
+
+    const envelope = JSON.parse(result.stdout);
+
+    expect(result.exitCode).toBe(0);
+    expect(envelope.hint.next.command).toBe("lark-cli docs +fetch --doc doccn_cli_fixture");
+  });
+
+  it("renders docs workflow human Hint Card through the CLI entry", async () => {
+    const fakeBin = await createFakeLarkCli(`
+const [, , domain, operation] = process.argv;
+if (domain === "docs" && operation === "+fetch") {
+  process.stdout.write(JSON.stringify({
+    ok: true,
+    data: { title: "CLI Fetch Doc", content: "body" }
+  }));
+  process.exit(0);
+}
+process.stderr.write("unexpected command");
+process.exit(1);
+`);
+
+    const result = await runCli(
+      ["run", "--", "lark-cli", "docs", "+fetch", "--doc", "doccn_cli_fetch"],
+      {
+        env: {
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          LANG: "en_US.UTF-8"
+        }
+      }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("CLI Fetch Doc");
+    expect(result.stdout).toContain("Next");
+    expect(result.stdout).toContain("lark-cli im +messages-send --chat-id <chat_id> --markdown");
   });
 });

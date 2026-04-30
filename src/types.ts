@@ -15,7 +15,7 @@ export interface RunCommandResult {
 }
 
 export interface HintSource {
-  type: "exit-code" | "stdout" | "stderr";
+  type: "command" | "exit-code" | "stdout" | "stderr";
   label: string;
 }
 

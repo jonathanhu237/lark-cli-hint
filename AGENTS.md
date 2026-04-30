@@ -40,7 +40,7 @@ docs/wiki search -> docs fetch -> suggest im push command
 The key Recover demo is wiki token / doc token confusion:
 
 ```bash
-lark-cli-hint run -- lark-cli docs +fetch --doc-token wiki_xxx
+lark-cli-hint run -- lark-cli docs +fetch --doc wiki_xxx
 ```
 
 The key Next demo is:
@@ -52,7 +52,7 @@ lark-cli-hint run -- lark-cli docs +search --query "<project keyword>"
 which should suggest:
 
 ```bash
-lark-cli docs +fetch --doc-token <top_doc_token>
+lark-cli docs +fetch --doc <top_doc_token>
 ```
 
 ## Hint Card Contract
@@ -85,7 +85,7 @@ Prioritize deterministic handling for:
 - `lark-cli docs +search` success.
 - `lark-cli docs +fetch` success.
 - `lark-cli docs +fetch` failures caused by token-type mismatch.
-- Preparing, but not executing, an `lark-cli im ...` push command.
+- Preparing, but not executing, an `lark-cli im +messages-send ...` push command.
 
 Use mocked fixtures when real Feishu access is unavailable. Mocking is acceptable for the contest demo as long as the behavior reflects real `lark-cli` command shapes and the hint cites its fixture source.
 

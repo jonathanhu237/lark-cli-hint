@@ -25,6 +25,57 @@
     "stderr": "已捕获 stderr",
     "none": "未捕获证据"
   },
+  "docs": {
+    "unknownDocument": "已读取的文档",
+    "sources": {
+      "commandArgs": "被包裹的命令参数",
+      "searchCandidate": "docs +search 候选文档：{{document}}",
+      "fetchOutput": "docs +fetch 输出"
+    },
+    "searchSuccess": {
+      "status": "找到候选文档：{{title}}。",
+      "hint": "搜索结果只是入口。先读取文档正文，再提取决策、风险或待办。",
+      "why": "当前 lark-cli docs +fetch 使用 --doc 传入文档 URL 或 token。"
+    },
+    "fetchSuccess": {
+      "status": "已读取文档正文：{{title}}。",
+      "hint": "文档正文已经可用。下一步适合准备一条飞书群消息，等待确认后再发送。",
+      "why": "MVP 通过建议 im 发送命令展示主动分发，但不能自动发送。",
+      "markdown": "来自 {{title}} 的知识提示：请确认已读取的文档内容，再把确认后的摘要发送到项目群。"
+    },
+    "fetchFailure": {
+      "docToken": {
+        "status": "docs +fetch 失败：命令使用了过时参数。",
+        "hint": "当前 lark-cli docs +fetch 需要使用 --doc，而不是 --doc-token。",
+        "why": "被包裹的命令参数包含 --doc-token，但已安装的 lark-cli help 暴露的是 --doc。"
+      },
+      "missingDoc": {
+        "status": "docs +fetch 缺少文档参数。",
+        "hint": "请使用 --doc 传入文档 URL 或 token，或者先搜索文档。",
+        "why": "被包裹的命令没有包含 --doc 或 --doc-token。"
+      },
+      "wikiToken": {
+        "status": "docs +fetch 可能传入了 wiki 节点 token。",
+        "hint": "wiki 节点 token 不一定是文档正文 token。请先搜索或解析 wiki 资源，再读取文档正文。",
+        "why": "--doc 的值看起来像 wiki 资源，而当前变更不会额外调用 API 解析 wiki 节点。"
+      },
+      "notConfigured": {
+        "status": "lark-cli 尚未为本次 docs 请求完成配置。",
+        "hint": "读取文档前请先初始化 lark-cli 配置。",
+        "why": "捕获到的输出包含 lark-cli 的 not configured 错误。"
+      },
+      "identity": {
+        "status": "docs +fetch 失败：当前身份不受支持。",
+        "hint": "请使用受支持的身份参数重新读取文档。",
+        "why": "捕获到的输出说明当前解析出的身份不支持这个命令。"
+      },
+      "generic": {
+        "status": "docs +fetch 失败，退出码为 {{exitCode}}。",
+        "hint": "没有匹配到已知的 docs 恢复规则。",
+        "why": "命令失败了，但捕获到的证据无法识别出当前支持的 docs 工作流修复方式。"
+      }
+    }
+  },
   "errors": {
     "missingCommand": "缺少被包裹的命令。请在 -- 后提供命令，例如：lark-cli-hint run -- lark-cli --version"
   }

@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "error": {
+    "type": "resource",
+    "message": "invalid document token"
+  }
+}

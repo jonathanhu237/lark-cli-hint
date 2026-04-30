@@ -1,4 +1,4 @@
-import { analyzeBaseline } from "./analyzer.js";
+import { analyze } from "./analyzer.js";
 import { createTranslator, resolveLocale } from "./i18n.js";
 import { createJsonEnvelope, renderHintCard } from "./renderer.js";
 import { runCommand } from "./runner.js";
@@ -48,7 +48,7 @@ export async function runApp(options: RunAppOptions): Promise<RunAppResult> {
     captureLimitBytes: options.captureLimitBytes
   });
 
-  const hint = analyzeBaseline(result, t);
+  const hint = analyze(result, t);
   const envelope = createJsonEnvelope(result, hint);
 
   if (options.mode === "json") {

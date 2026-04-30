@@ -25,6 +25,57 @@
     "stderr": "captured stderr",
     "none": "no evidence captured"
   },
+  "docs": {
+    "unknownDocument": "the fetched document",
+    "sources": {
+      "commandArgs": "wrapped command arguments",
+      "searchCandidate": "docs +search candidate: {{document}}",
+      "fetchOutput": "docs +fetch output"
+    },
+    "searchSuccess": {
+      "status": "Found a document candidate: {{title}}.",
+      "hint": "The search result is only an entry point. Fetch the document body before extracting decisions, risks, or action items.",
+      "why": "Current lark-cli docs fetch uses --doc with a document URL or token."
+    },
+    "fetchSuccess": {
+      "status": "Fetched document content: {{title}}.",
+      "hint": "The document body is available. The next useful step is to prepare a Feishu group message for review.",
+      "why": "The MVP demonstrates active distribution by suggesting an im send command, but it must not send automatically.",
+      "markdown": "Knowledge hint from {{title}}: review the fetched document content, then send the confirmed summary to the project group."
+    },
+    "fetchFailure": {
+      "docToken": {
+        "status": "docs +fetch failed because the command used an outdated flag.",
+        "hint": "Current lark-cli docs +fetch expects --doc, not --doc-token.",
+        "why": "The wrapped command arguments include --doc-token, while the installed lark-cli help exposes --doc."
+      },
+      "missingDoc": {
+        "status": "docs +fetch is missing a document.",
+        "hint": "Pass a document URL or token with --doc, or search docs first to find one.",
+        "why": "The wrapped command does not include --doc or --doc-token."
+      },
+      "wikiToken": {
+        "status": "docs +fetch may be using a wiki node token.",
+        "hint": "A wiki node token is not always the document body token. Search or resolve the wiki resource before fetching the document body.",
+        "why": "The --doc value looks like a wiki resource, and this change does not resolve wiki nodes through extra API calls."
+      },
+      "notConfigured": {
+        "status": "lark-cli is not configured for this docs request.",
+        "hint": "Initialize lark-cli configuration before fetching documents.",
+        "why": "The captured output contains a not configured error from lark-cli."
+      },
+      "identity": {
+        "status": "docs +fetch failed because the selected identity is unsupported.",
+        "hint": "Retry the fetch with a supported identity flag.",
+        "why": "The captured output says the resolved identity is not supported for this command."
+      },
+      "generic": {
+        "status": "docs +fetch failed with exit code {{exitCode}}.",
+        "hint": "No known docs Recover rule matched this failure.",
+        "why": "The command failed, but the captured evidence does not identify a supported docs workflow fix."
+      }
+    }
+  },
   "errors": {
     "missingCommand": "Missing wrapped command. Provide a command after --, for example: lark-cli-hint run -- lark-cli --version"
   }
