@@ -49,6 +49,18 @@ If a proposed feature pulls from only one of these, redesign or reject.
 - **Secrets**: never commit Feishu credentials, LLM API keys, tenant-specific IDs, or seed content with real names. Configuration goes in `~/.config/lark-cli-hint/config.yaml` (out of repo) or environment variables.
 - **Style**: enforced by `ruff` (formatting + linting); type-checked with `mypy` where it pays off (engine and index modules).
 
+## Schema fixtures
+
+`fixtures/schema/<service>.json` are committed snapshots of `lark-cli schema <service>` output. They serve as the source of truth for command surface, parameter types, scopes, and entity definitions used by the rule engine, entity matcher, and hallucination check.
+
+The captured `lark-cli` version is recorded in `fixtures/schema/.lark-cli-version`. To refresh after a `lark-cli` upgrade:
+
+```sh
+bash scripts/refresh-schemas.sh
+```
+
+Note: top-level shortcuts (`docs +fetch`, `base +record-create`, etc.) are NOT in `lark-cli schema` output. Their definitions, when needed, are sourced separately (see specs).
+
 ## Where to find more
 
 - **Active change in flight**: `openspec/changes/<change-name>/proposal.md`
