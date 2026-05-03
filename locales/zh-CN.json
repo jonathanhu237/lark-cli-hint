@@ -29,8 +29,14 @@
     "unknownDocument": "已读取的文档",
     "sources": {
       "commandArgs": "被包裹的命令参数",
+      "identityEvidence": "lark-cli 身份错误",
       "searchCandidate": "docs +search 候选文档：{{document}}",
       "fetchOutput": "docs +fetch 输出"
+    },
+    "identityFailure": {
+      "status": "docs 命令失败：当前身份不受支持。",
+      "hint": "请使用 user 身份重试同一条命令。",
+      "why": "捕获到的输出说明该命令支持 user 身份，或明确提示使用 --as user。"
     },
     "searchSuccess": {
       "status": "找到候选文档：{{title}}。",

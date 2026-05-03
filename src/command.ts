@@ -37,6 +37,33 @@ export function hasOption(command: string[], name: string): boolean {
   return getOption(command, name) !== null;
 }
 
+export function renderCommand(command: string[]): string {
+  return command.map(shellQuote).join(" ");
+}
+
+export function renderWithUserIdentity(command: string[]): string {
+  const rewritten = command.slice(0, 3);
+
+  rewritten.push("--as", "user");
+
+  for (let index = 3; index < command.length; index += 1) {
+    const value = command[index];
+
+    if (value === "--as") {
+      index += 1;
+      continue;
+    }
+
+    if (value.startsWith("--as=")) {
+      continue;
+    }
+
+    rewritten.push(value);
+  }
+
+  return renderCommand(rewritten);
+}
+
 export function shellQuote(value: string): string {
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) {
     return value;

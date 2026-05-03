@@ -29,8 +29,14 @@
     "unknownDocument": "the fetched document",
     "sources": {
       "commandArgs": "wrapped command arguments",
+      "identityEvidence": "lark-cli identity error",
       "searchCandidate": "docs +search candidate: {{document}}",
       "fetchOutput": "docs +fetch output"
+    },
+    "identityFailure": {
+      "status": "The docs command failed because the selected identity is unsupported.",
+      "hint": "Retry the same command with user identity.",
+      "why": "The captured output says this command supports user identity or suggests --as user."
     },
     "searchSuccess": {
       "status": "Found a document candidate: {{title}}.",

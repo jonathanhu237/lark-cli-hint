@@ -1,4 +1,4 @@
-import { classifyLarkCommand, getOption, hasOption, shellQuote } from "./command.js";
+import { classifyLarkCommand, getOption, hasOption, renderWithUserIdentity, shellQuote } from "./command.js";
 import { parseJsonObject } from "./json.js";
 import type { Hint, HintSource, RunCommandResult } from "./types.js";
 
@@ -16,12 +16,24 @@ export function analyzeDocsWorkflow(result: RunCommandResult, t: Translator): Hi
     return analyzeDocsSearchSuccess(result, t);
   }
 
+  if (kind === "docs-search" && result.exitCode !== 0) {
+    return analyzeDocsSearchFailure(result, t);
+  }
+
   if (kind === "docs-fetch" && result.exitCode === 0) {
     return analyzeDocsFetchSuccess(result, t);
   }
 
   if (kind === "docs-fetch" && result.exitCode !== 0) {
     return analyzeDocsFetchFailure(result, t);
+  }
+
+  return null;
+}
+
+function analyzeDocsSearchFailure(result: RunCommandResult, t: Translator): Hint | null {
+  if (hasUserIdentityRecoveryEvidence(result)) {
+    return identityFailureHint(result, t);
   }
 
   return null;
@@ -136,18 +148,8 @@ function analyzeDocsFetchFailure(result: RunCommandResult, t: Translator): Hint 
     });
   }
 
-  if (/identity/i.test(evidence) && /not supported|only supports/i.test(evidence)) {
-    const document = doc || docToken || "<document>";
-    const nextCommand = `lark-cli docs +fetch --as user --doc ${shellQuote(document)}`;
-    return failureHint({
-      t,
-      confidence: 0.76,
-      statusKey: "docs.fetchFailure.identity.status",
-      hintKey: "docs.fetchFailure.identity.hint",
-      whyKey: "docs.fetchFailure.identity.why",
-      nextCommand,
-      sources: failureSources(result, t)
-    });
+  if (hasUserIdentityRecoveryEvidence(result)) {
+    return identityFailureHint(result, t);
   }
 
   return {
@@ -163,6 +165,18 @@ function analyzeDocsFetchFailure(result: RunCommandResult, t: Translator): Hint 
     why: t("docs.fetchFailure.generic.why"),
     sources: failureSources(result, t)
   };
+}
+
+function identityFailureHint(result: RunCommandResult, t: Translator): Hint {
+  return failureHint({
+    t,
+    confidence: 0.8,
+    statusKey: "docs.identityFailure.status",
+    hintKey: "docs.identityFailure.hint",
+    whyKey: "docs.identityFailure.why",
+    nextCommand: renderWithUserIdentity(result.command),
+    sources: identityFailureSources(result, t)
+  });
 }
 
 function failureHint(options: {
@@ -187,6 +201,35 @@ function failureHint(options: {
     why: options.t(options.whyKey),
     sources: options.sources
   };
+}
+
+function hasUserIdentityRecoveryEvidence(result: RunCommandResult): boolean {
+  const evidence = `${result.stderr}\n${result.stdout}`.replace(/\s+/g, " ");
+
+  return (
+    /use\s+--as\s+user/i.test(evidence)
+    || /only supports:\s*user\b/i.test(evidence)
+    || (
+      /identity/i.test(evidence)
+      && /not supported|unsupported/i.test(evidence)
+      && /supports?:\s*[`"']?user\b/i.test(evidence)
+    )
+  );
+}
+
+function identityFailureSources(result: RunCommandResult, t: Translator): HintSource[] {
+  const sources: HintSource[] = [
+    source("exit-code", t("sources.exitCode", { exitCode: result.exitCode })),
+    source("command", t("docs.sources.commandArgs"))
+  ];
+
+  if (result.stderr.trim()) {
+    sources.push(source("stderr", t("docs.sources.identityEvidence")));
+  } else if (result.stdout.trim()) {
+    sources.push(source("stdout", t("docs.sources.identityEvidence")));
+  }
+
+  return sources;
 }
 
 function failureSources(result: RunCommandResult, t: Translator): HintSource[] {
@@ -231,24 +274,39 @@ function extractDocumentCandidate(root: Record<string, unknown>): DocumentCandid
       ["document_url"],
       ["doc_url"],
       ["docs_url"],
+      ["result_meta", "url"],
+      ["result_meta", "document_url"],
+      ["result_meta", "doc_url"],
+      ["result_meta", "docs_url"],
       ["doc"],
       ["doc_token"],
       ["document_token"],
       ["docs_token"],
       ["token"],
-      ["obj_token"]
+      ["obj_token"],
+      ["result_meta", "doc"],
+      ["result_meta", "doc_token"],
+      ["result_meta", "document_token"],
+      ["result_meta", "docs_token"],
+      ["result_meta", "token"],
+      ["result_meta", "obj_token"]
     ]);
 
     if (!document) {
       continue;
     }
 
-    const title = firstStringAtPaths(item, [
+    const rawTitle = firstStringAtPaths(item, [
       ["title"],
+      ["title_highlighted"],
       ["name"],
       ["doc_name"],
-      ["document", "title"]
-    ]) ?? document;
+      ["document", "title"],
+      ["result_meta", "title"],
+      ["result_meta", "name"],
+      ["result_meta", "doc_name"]
+    ]);
+    const title = cleanSearchTitle(rawTitle) ?? document;
 
     return {
       document,
@@ -301,4 +359,9 @@ function valueAtPath(root: Record<string, unknown>, path: string[]): unknown {
 
 function isWikiLookingToken(value: string): boolean {
   return /^(wiki_|wikcn|wiki-)/i.test(value);
+}
+
+function cleanSearchTitle(value: string | null): string | null {
+  const cleaned = value?.replace(/<\/?h>/gi, "").trim();
+  return cleaned || null;
 }

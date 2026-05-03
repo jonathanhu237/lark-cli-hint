@@ -1,0 +1,9 @@
+{
+  "ok": false,
+  "identity": "bot",
+  "error": {
+    "type": "validation",
+    "message": "resolved identity \"bot\" (via auto-detect or default-as) is not supported, this command only supports: user",
+    "hint": "use --as user"
+  }
+}

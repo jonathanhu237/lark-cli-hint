@@ -181,6 +181,42 @@ process.exit(1);
     expect(envelope.hint.next.command).toBe("lark-cli docs +fetch --doc doccn_cli_fixture");
   });
 
+  it("emits docs identity Recover JSON hints through the CLI entry", async () => {
+    const fakeBin = await createFakeLarkCli(`
+const [, , domain, operation] = process.argv;
+if (domain === "docs" && operation === "+search") {
+  process.stdout.write(JSON.stringify({
+    ok: false,
+    identity: "bot",
+    error: {
+      type: "validation",
+      message: "resolved identity \\"bot\\" is not supported, this command only supports: user",
+      hint: "use --as user"
+    }
+  }));
+  process.exit(2);
+}
+process.stderr.write("unexpected command");
+process.exit(1);
+`);
+
+    const result = await runCli(
+      ["run", "--json", "--", "lark-cli", "docs", "+search", "--query", "demo"],
+      {
+        env: {
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          LANG: "en_US.UTF-8"
+        }
+      }
+    );
+
+    const envelope = JSON.parse(result.stdout);
+
+    expect(result.exitCode).toBe(2);
+    expect(envelope.hint.kind).toBe("failure");
+    expect(envelope.hint.next.command).toBe("lark-cli docs +search --as user --query demo");
+  });
+
   it("renders docs workflow human Hint Card through the CLI entry", async () => {
     const fakeBin = await createFakeLarkCli(`
 const [, , domain, operation] = process.argv;
@@ -209,5 +245,41 @@ process.exit(1);
     expect(result.stdout).toContain("CLI Fetch Doc");
     expect(result.stdout).toContain("Next");
     expect(result.stdout).toContain("lark-cli im +messages-send --chat-id <chat_id> --markdown");
+  });
+
+  it("renders docs identity Recover human Hint Card through the CLI entry", async () => {
+    const fakeBin = await createFakeLarkCli(`
+const [, , domain, operation] = process.argv;
+if (domain === "docs" && operation === "+search") {
+  process.stdout.write(JSON.stringify({
+    ok: false,
+    identity: "bot",
+    error: {
+      type: "validation",
+      message: "resolved identity \\"bot\\" is not supported, this command only supports: user",
+      hint: "use --as user"
+    }
+  }));
+  process.exit(2);
+}
+process.stderr.write("unexpected command");
+process.exit(1);
+`);
+
+    const result = await runCli(
+      ["run", "--", "lark-cli", "docs", "+search", "--as", "bot", "--query", "demo"],
+      {
+        env: {
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          LANG: "en_US.UTF-8"
+        }
+      }
+    );
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toContain("Status");
+    expect(result.stdout).toContain("selected identity is unsupported");
+    expect(result.stdout).toContain("lark-cli docs +search --as user --query demo");
+    expect(result.stdout).not.toContain("--as bot");
   });
 });
