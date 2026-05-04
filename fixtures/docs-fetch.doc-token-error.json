@@ -1,7 +1,0 @@
-{
-  "ok": false,
-  "error": {
-    "type": "validation",
-    "message": "unknown flag: --doc-token"
-  }
-}
