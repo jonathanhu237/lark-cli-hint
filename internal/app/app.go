@@ -208,7 +208,11 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 
 	cueOutput := stderr
 	fmt.Fprintln(cueOutput)
-	fmt.Fprint(cueOutput, card.Render(kcard))
+	if shouldStyleOutput(cueOutput) {
+		fmt.Fprint(cueOutput, card.RenderStyled(kcard, terminalWidth(cueOutput)))
+	} else {
+		fmt.Fprint(cueOutput, card.Render(kcard))
+	}
 
 	if opts.preparePush || opts.sendPush || cfg.Feishu.SendPushDefault {
 		target := firstNonEmpty(opts.pushChat, cfg.Feishu.DefaultPushChat)
@@ -294,6 +298,22 @@ func isInteractive(value any) bool {
 		return false
 	}
 	return term.IsTerminal(int(file.Fd()))
+}
+
+func shouldStyleOutput(value any) bool {
+	return isInteractive(value) && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
+}
+
+func terminalWidth(value any) int {
+	file, ok := value.(*os.File)
+	if !ok {
+		return 88
+	}
+	width, _, err := term.GetSize(int(file.Fd()))
+	if err != nil || width <= 0 {
+		return 88
+	}
+	return width
 }
 
 func firstNonEmpty(values ...string) string {

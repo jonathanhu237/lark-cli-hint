@@ -553,6 +553,29 @@ func TestDocumentCitationIncludesIDWhenURLMissing(t *testing.T) {
 	}
 }
 
+func TestStyledRenderKeepsCardContent(t *testing.T) {
+	rendered := RenderStyled(KnowledgeCard{
+		ID:          "cue_test",
+		Command:     "node examples/failing-feishu-api.js",
+		Scenario:    "检测到飞书 API 权限 / scope / token 错误。",
+		LikelyCause: "证据显示当前错误与飞书文档读取 scope 配置有关。",
+		NextAction:  "检查飞书开放平台应用权限，确认 `docx:document:read` 已添加并发布权限变更。",
+		Confidence:  evidence.ConfidenceHigh,
+		QueryCount:  4,
+		Citations: []Citation{{
+			Type:    "doc",
+			Title:   "Guide",
+			ID:      "doc_token_123",
+			Summary: "missing required scope: docx:document:read 权限变更 重新授权",
+		}},
+	}, 100)
+	for _, want := range []string{"lark-cue", "cue_test", "Evidence", "Guide", "doc_token_123"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("styled card missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
 func TestPartialRetrievalKeepsEvidenceCauseAndAddsCaveat(t *testing.T) {
 	scenario, _ := detector.Detect("missing required scope: docx:document:read")
 	card := Build(context.Background(), Input{

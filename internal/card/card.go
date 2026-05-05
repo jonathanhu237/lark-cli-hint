@@ -8,6 +8,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"lark-cue/internal/detector"
 	"lark-cue/internal/evidence"
@@ -166,6 +169,82 @@ func Render(k KnowledgeCard) string {
 	return b.String()
 }
 
+func RenderStyled(k KnowledgeCard, width int) string {
+	if width < 60 {
+		return Render(k)
+	}
+	cardWidth := clamp(width-4, 72, 104)
+	contentWidth := cardWidth - 6
+
+	accent := lipgloss.Color("#5A7CFF")
+	ok := lipgloss.Color("#2EAD6B")
+	warn := lipgloss.Color("#E0A11B")
+	muted := lipgloss.Color("#7C8798")
+	text := lipgloss.Color("#E7EAF0")
+
+	box := lipgloss.NewStyle().
+		Width(cardWidth).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(accent).
+		Padding(1, 2)
+	title := lipgloss.NewStyle().Bold(true).Foreground(accent)
+	label := lipgloss.NewStyle().Bold(true).Foreground(muted)
+	body := lipgloss.NewStyle().Foreground(text).Width(contentWidth)
+	sectionTitle := lipgloss.NewStyle().Bold(true).Foreground(accent).MarginTop(1)
+	metaStyle := lipgloss.NewStyle().Foreground(muted)
+	highPill := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#071B10")).Background(ok).Padding(0, 1)
+	lowPill := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#271B04")).Background(warn).Padding(0, 1)
+	fixturePill := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#241300")).Background(lipgloss.Color("#FFC857")).Padding(0, 1)
+
+	confidencePill := lowPill.Render("LOW")
+	if k.Confidence == evidence.ConfidenceHigh {
+		confidencePill = highPill.Render("HIGH")
+	}
+
+	headerParts := []string{
+		title.Render("lark-cue"),
+		metaStyle.Render(k.ID),
+		confidencePill,
+	}
+	if k.Fixture {
+		headerParts = append(headerParts, fixturePill.Render("FIXTURE"))
+	}
+
+	var sections []string
+	sections = append(sections, strings.Join(headerParts, "  "))
+	sections = append(sections, renderStyledKV(label, body, "Scenario", k.Scenario, contentWidth))
+	sections = append(sections, renderStyledKV(label, body, "Likely cause", valueOr(k.LikelyCause, "未找到足够证据判断具体原因。"), contentWidth))
+	sections = append(sections, renderStyledKV(label, body, "Next action", valueOr(k.NextAction, "检查飞书开放平台应用权限、token 状态和本地授权状态后重试。"), contentWidth))
+
+	sections = append(sections, sectionTitle.Render("Evidence"))
+	if len(k.Citations) == 0 {
+		sections = append(sections, body.Render("没有找到可支撑结论的内部来源。"))
+	} else {
+		for i, citation := range k.Citations {
+			sections = append(sections, renderStyledCitation(i+1, citation, contentWidth, accent, muted))
+		}
+	}
+
+	confidence := "Low. 未找到足够强的内部知识证据。"
+	switch k.Confidence {
+	case evidence.ConfidenceHigh:
+		confidence = "High. 检索证据同时命中错误信号和处理动作。"
+	case evidence.ConfidenceLow:
+		confidence = "Low. 当前只有部分内部证据支撑，请人工核对后采用。"
+	}
+	sections = append(sections, renderStyledKV(label, body, "Confidence", confidence, contentWidth))
+	if k.Caveat != "" {
+		sections = append(sections, renderStyledKV(label, body, "Caveat", k.Caveat, contentWidth))
+	}
+	if k.RetrievalError != "" {
+		sections = append(sections, renderStyledKV(label, body, "Retrieval", "Real Feishu retrieval failed: "+k.RetrievalError, contentWidth))
+	}
+
+	meta := fmt.Sprintf("command: %s  |  sources: %d  |  queries: %d", k.Command, len(k.Citations), k.QueryCount)
+	sections = append(sections, metaStyle.Width(contentWidth).Render(wrapText(meta, contentWidth)))
+	return box.Render(strings.Join(sections, "\n")) + "\n"
+}
+
 func citationFrom(item evidence.ScoredSource) Citation {
 	source := item.Source
 	return Citation{
@@ -179,6 +258,49 @@ func citationFrom(item evidence.ScoredSource) Citation {
 		Summary:   item.Snippet,
 		Fixture:   source.Fixture,
 	}
+}
+
+func renderStyledKV(labelStyle, bodyStyle lipgloss.Style, key, value string, width int) string {
+	return labelStyle.Render(key) + "\n" + bodyStyle.Render(wrapText(value, width))
+}
+
+func renderStyledCitation(index int, c Citation, width int, accent, muted lipgloss.Color) string {
+	number := lipgloss.NewStyle().Bold(true).Foreground(accent).Render(fmt.Sprintf("%d.", index))
+	source := citationSourceLabel(c)
+	sourceLine := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#DDE4FF")).
+		Width(width - 4).
+		Render(wrapText(source, width-4))
+	if c.Fixture {
+		sourceLine += "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("#FFC857")).Render("fixture")
+	}
+	summary := valueOr(c.Summary, "无摘要")
+	detail := lipgloss.NewStyle().Foreground(muted).Width(width - 4).Render(wrapText(summary, width-4))
+	return number + " " + strings.ReplaceAll(sourceLine, "\n", "\n   ") + "\n" + indent(detail, "   ")
+}
+
+func citationSourceLabel(c Citation) string {
+	if c.Type == "im" {
+		parts := []string{"群聊"}
+		if c.ChatName != "" {
+			parts = append(parts, c.ChatName)
+		}
+		if c.Sender != "" {
+			parts = append(parts, c.Sender)
+		}
+		if c.Timestamp != "" {
+			parts = append(parts, c.Timestamp)
+		}
+		return strings.Join(parts, " · ")
+	}
+	label := valueOr(c.Title, valueOr(c.URL, c.ID))
+	if c.URL != "" {
+		label += " · " + c.URL
+	} else if c.ID != "" && c.ID != label {
+		label += " · " + c.ID
+	}
+	return label
 }
 
 func renderCitation(c Citation) string {
@@ -657,6 +779,122 @@ func newID() string {
 func valueOr(value, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
+	}
+	return value
+}
+
+func wrapText(value string, width int) string {
+	if width <= 0 {
+		return value
+	}
+	var lines []string
+	for _, paragraph := range strings.Split(value, "\n") {
+		paragraph = strings.TrimSpace(paragraph)
+		if paragraph == "" {
+			lines = append(lines, "")
+			continue
+		}
+		var line strings.Builder
+		lineWidth := 0
+		for _, token := range wrapTokens(paragraph) {
+			tokenWidth := lipgloss.Width(token)
+			if strings.TrimSpace(token) == "" && lineWidth == 0 {
+				continue
+			}
+			if lineWidth > 0 && lineWidth+tokenWidth > width {
+				lines = append(lines, strings.TrimSpace(line.String()))
+				line.Reset()
+				lineWidth = 0
+			}
+			if tokenWidth > width {
+				for _, part := range splitByWidth(token, width) {
+					partWidth := lipgloss.Width(part)
+					if lineWidth > 0 && lineWidth+partWidth > width {
+						lines = append(lines, strings.TrimSpace(line.String()))
+						line.Reset()
+						lineWidth = 0
+					}
+					line.WriteString(part)
+					lineWidth += partWidth
+				}
+				continue
+			}
+			if strings.TrimSpace(token) == "" && lineWidth == 0 {
+				continue
+			}
+			line.WriteString(token)
+			lineWidth += tokenWidth
+		}
+		if line.Len() > 0 {
+			lines = append(lines, strings.TrimSpace(line.String()))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func wrapTokens(value string) []string {
+	var tokens []string
+	var ascii strings.Builder
+	flushASCII := func() {
+		if ascii.Len() == 0 {
+			return
+		}
+		tokens = append(tokens, ascii.String())
+		ascii.Reset()
+	}
+	for _, r := range value {
+		switch {
+		case unicode.IsSpace(r):
+			flushASCII()
+			tokens = append(tokens, string(r))
+		case r <= 127:
+			ascii.WriteRune(r)
+		default:
+			flushASCII()
+			tokens = append(tokens, string(r))
+		}
+	}
+	flushASCII()
+	return tokens
+}
+
+func splitByWidth(value string, width int) []string {
+	var parts []string
+	var part strings.Builder
+	partWidth := 0
+	for _, r := range value {
+		cellWidth := lipgloss.Width(string(r))
+		if partWidth > 0 && partWidth+cellWidth > width {
+			parts = append(parts, part.String())
+			part.Reset()
+			partWidth = 0
+		}
+		part.WriteRune(r)
+		partWidth += cellWidth
+	}
+	if part.Len() > 0 {
+		parts = append(parts, part.String())
+	}
+	return parts
+}
+
+func indent(value, prefix string) string {
+	lines := strings.Split(value, "\n")
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+		lines[i] = prefix + line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func clamp(value, minValue, maxValue int) int {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
 	}
 	return value
 }
