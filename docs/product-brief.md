@@ -4,6 +4,12 @@
 
 This project is for the Feishu OpenClaw AI Campus Challenge, OpenClaw track.
 
+The repository name and CLI name are both:
+
+```text
+lark-cue
+```
+
 The track asks participants to build an office agent with long-term memory and active service capability using Feishu OpenClaw, `lark-cli`, the Feishu ecosystem, and large model capabilities.
 
 The selected topic is:
@@ -29,7 +35,7 @@ This is especially painful for developers working in the terminal. When a comman
 
 ## Product Positioning
 
-The product is an active enterprise knowledge assistant for developers.
+`lark-cue` is an active enterprise knowledge assistant for developers.
 
 It stays close to the CLI workflow. When a developer hits a terminal error, executes a risky command, or enters a known workflow checkpoint, the assistant proactively retrieves relevant Feishu knowledge, compresses it into a high-density knowledge card, and delivers it in the terminal or Feishu group.
 
@@ -89,6 +95,12 @@ It produces a short knowledge card:
 The card appears in the terminal.
 Optionally, a summarized card is pushed to a Feishu group for team visibility.
 The user can mark the hint useful or not useful for evaluation.
+```
+
+Example command shape:
+
+```bash
+lark-cue run -- pnpm dev
 ```
 
 This demo fits the contest because it shows:
@@ -224,4 +236,3 @@ It found the team's existing answer.
 It gave me the shortest safe next step.
 It showed where the answer came from.
 ```
-

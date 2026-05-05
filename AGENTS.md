@@ -6,6 +6,12 @@ This file is the working agreement for humans and AI agents contributing to this
 
 This project is for the Feishu OpenClaw AI Campus Challenge.
 
+Repository name and CLI name:
+
+```text
+lark-cue
+```
+
 The product is an immersive fragmented knowledge push assistant for enterprise developers. It lives close to the CLI workflow, observes developer signals such as terminal errors, specific commands, workflow checkpoints, or repeated failure patterns, then retrieves relevant enterprise knowledge from Feishu sources and turns it into short, actionable, cited knowledge cards.
 
 The core value is not search. The core value is active, contextual knowledge delivery.
@@ -134,4 +140,3 @@ Keep implementation choices aligned with the product promise:
 - Use fixtures when real Feishu access is unavailable, but keep command shapes and evidence realistic.
 - Keep side effects explicit. Preparing a group push is safer than silently sending one.
 - Keep the UI compact enough for an active terminal workflow.
-
