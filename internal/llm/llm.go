@@ -124,7 +124,6 @@ func (p *OpenAICompatible) chat(ctx context.Context, system, user string) (strin
 			{Role: "system", Content: system},
 			{Role: "user", Content: user},
 		},
-		Temperature: 0.2,
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -156,9 +155,8 @@ func (p *OpenAICompatible) chat(ctx context.Context, system, user string) (strin
 }
 
 type chatRequest struct {
-	Model       string        `json:"model"`
-	Messages    []chatMessage `json:"messages"`
-	Temperature float64       `json:"temperature"`
+	Model    string        `json:"model"`
+	Messages []chatMessage `json:"messages"`
 }
 
 type chatMessage struct {

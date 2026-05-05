@@ -34,6 +34,7 @@ type runOptions struct {
 	sendPush         bool
 	pushChat         string
 	noFeedbackPrompt bool
+	verbose          bool
 }
 
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -91,6 +92,8 @@ func parseRunArgs(args []string) (runOptions, error) {
 			opts.sendPush = true
 		case "--no-feedback-prompt":
 			opts.noFeedbackPrompt = true
+		case "--verbose":
+			opts.verbose = true
 		case "--push-chat":
 			if i+1 >= len(args) {
 				return opts, errors.New("--push-chat requires a chat id or chat name")
@@ -138,7 +141,25 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 	fmt.Fprintf(stderr, "\nlark-cue: detected %s; searching Feishu knowledge...\n", scenario.Name)
 
 	provider := llm.NewOpenAICompatible(cfg.LLM)
-	queries := query.Build(ctx, opts.command, analysisOutput, scenario, provider)
+	if opts.verbose {
+		if strings.TrimSpace(cfg.LLM.APIKey) != "" && strings.TrimSpace(cfg.LLM.Model) != "" {
+			fmt.Fprintf(stderr, "lark-cue: LLM configured model=%s base_url=%s\n", cfg.LLM.Model, cfg.LLM.BaseURL)
+		} else {
+			fmt.Fprintln(stderr, "lark-cue: LLM not configured; using deterministic query/card fallback")
+		}
+	}
+	queryReport := query.BuildWithReport(ctx, opts.command, analysisOutput, scenario, provider)
+	queries := queryReport.Queries
+	if opts.verbose {
+		fmt.Fprintf(stderr, "lark-cue: seed queries: %s\n", strings.Join(queryReport.Seeds, " | "))
+		if queryReport.LLMError != "" {
+			fmt.Fprintf(stderr, "lark-cue: LLM query expansion fallback: %s\n", queryReport.LLMError)
+		} else if len(queryReport.Expanded) > 0 {
+			fmt.Fprintf(stderr, "lark-cue: LLM expanded queries: %s\n", strings.Join(queryReport.Expanded, " | "))
+		} else {
+			fmt.Fprintln(stderr, "lark-cue: LLM query expansion returned no additional queries")
+		}
+	}
 
 	var retriever retrieval.Retriever
 	if opts.demoFixture {
@@ -158,6 +179,7 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 
 	scored := evidence.Score(sources)
 	selected, confidence := evidence.Select(scored)
+	var llmStatus card.LLMStatus
 	kcard := card.Build(ctx, card.Input{
 		Command:         opts.command,
 		Output:          analysisOutput,
@@ -169,7 +191,20 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 		RetrievalError:  retrievalErr,
 		Fixture:         opts.demoFixture,
 		Provider:        provider,
+		LLMStatus:       &llmStatus,
 	})
+	if opts.verbose {
+		switch {
+		case llmStatus.Accepted:
+			fmt.Fprintln(stderr, "lark-cue: LLM card draft accepted")
+		case llmStatus.Attempted && llmStatus.Error != "":
+			fmt.Fprintf(stderr, "lark-cue: LLM card draft fallback: %s\n", llmStatus.Error)
+		case llmStatus.Attempted:
+			fmt.Fprintln(stderr, "lark-cue: LLM card draft fallback")
+		default:
+			fmt.Fprintln(stderr, "lark-cue: LLM card draft not attempted")
+		}
+	}
 
 	cueOutput := stderr
 	fmt.Fprintln(cueOutput)
@@ -293,5 +328,6 @@ Flags:
   --prepare-push        Print a Feishu group message preview
   --send-push           Send the prepared message through lark-cli
   --push-chat <target>  Feishu chat id or chat name for push sending
-  --no-feedback-prompt  Do not ask for interactive useful/not-useful feedback`)
+  --no-feedback-prompt  Do not ask for interactive useful/not-useful feedback
+  --verbose             Print LLM/retrieval diagnostics without secrets`)
 }

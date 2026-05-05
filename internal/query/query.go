@@ -19,16 +19,34 @@ type Expander interface {
 	ExpandQueries(ctx context.Context, command []string, output string, scenario detector.Scenario, seeds []string) ([]string, error)
 }
 
+type BuildReport struct {
+	Queries  []string
+	Seeds    []string
+	Expanded []string
+	LLMError string
+}
+
 func Build(ctx context.Context, command []string, output string, scenario detector.Scenario, expander Expander) []string {
+	return BuildWithReport(ctx, command, output, scenario, expander).Queries
+}
+
+func BuildWithReport(ctx context.Context, command []string, output string, scenario detector.Scenario, expander Expander) BuildReport {
 	seeds := ExtractSeeds(output)
+	report := BuildReport{
+		Queries: seeds,
+		Seeds:   seeds,
+	}
 	if expander == nil {
-		return seeds
+		return report
 	}
 	expanded, err := expander.ExpandQueries(ctx, command, output, scenario, seeds)
 	if err != nil {
-		return seeds
+		report.LLMError = err.Error()
+		return report
 	}
-	return normalize(append(seeds, expanded...), maxQueries, maxLength)
+	report.Expanded = normalize(expanded, maxQueries, maxLength)
+	report.Queries = normalize(append(seeds, expanded...), maxQueries, maxLength)
+	return report
 }
 
 func ExtractSeeds(output string) []string {

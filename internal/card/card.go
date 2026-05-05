@@ -27,6 +27,13 @@ type Input struct {
 	RetrievalError  error
 	Fixture         bool
 	Provider        llm.Provider
+	LLMStatus       *LLMStatus
+}
+
+type LLMStatus struct {
+	Attempted bool
+	Accepted  bool
+	Error     string
 }
 
 type KnowledgeCard struct {
@@ -78,23 +85,38 @@ func Build(ctx context.Context, input Input) KnowledgeCard {
 	}
 
 	if input.Provider != nil && len(input.Evidence) > 0 {
+		if input.LLMStatus != nil {
+			input.LLMStatus.Attempted = true
+		}
 		if draft, err := input.Provider.GenerateCard(ctx, llm.CardInput{
 			Command:    input.Command,
 			Output:     input.Output,
 			Scenario:   input.Scenario,
 			Evidence:   input.Evidence,
 			Confidence: input.Confidence,
-		}); err == nil && (strings.TrimSpace(draft.LikelyCause) != "" || strings.TrimSpace(draft.Caveat) != "") {
+		}); err != nil {
+			if input.LLMStatus != nil {
+				input.LLMStatus.Error = err.Error()
+			}
+		} else if strings.TrimSpace(draft.LikelyCause) != "" || strings.TrimSpace(draft.Caveat) != "" {
 			card.LikelyCause = strings.TrimSpace(draft.LikelyCause)
 			card.NextAction = strings.TrimSpace(draft.NextAction)
 			card.Caveat = strings.TrimSpace(draft.Caveat)
 			if draftGrounded(draft, input.Evidence) {
+				if input.LLMStatus != nil {
+					input.LLMStatus.Accepted = true
+				}
 				enforceConfidence(&card, input.Confidence, input.RetrievalStatus, input.RetrievalError, input.Fixture, input.Evidence)
 				if card.NextAction == "" {
 					card.NextAction = fallbackNextAction(input.Confidence, input.Evidence)
 				}
 				return card
 			}
+			if input.LLMStatus != nil {
+				input.LLMStatus.Error = "draft was not grounded in cited snippets"
+			}
+		} else if input.LLMStatus != nil {
+			input.LLMStatus.Error = "empty card draft"
 		}
 	}
 
