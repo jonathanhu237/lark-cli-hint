@@ -138,7 +138,12 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 	}
 
 	started := time.Now()
-	fmt.Fprintf(stderr, "\nlark-cue: detected %s; searching Feishu knowledge...\n", scenario.Name)
+	if shouldStyleOutput(stderr) {
+		fmt.Fprintln(stderr)
+		fmt.Fprint(stderr, card.RenderStatusStyled(scenario, analysisOutput, terminalWidth(stderr)))
+	} else {
+		fmt.Fprintf(stderr, "\nlark-cue: detected %s; searching Feishu knowledge...\n", scenario.Name)
+	}
 
 	provider := llm.NewOpenAICompatible(cfg.LLM)
 	if opts.verbose {

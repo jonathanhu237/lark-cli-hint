@@ -576,6 +576,18 @@ func TestStyledRenderKeepsCardContent(t *testing.T) {
 	}
 }
 
+func TestStyledStatusRenderKeepsSignalContent(t *testing.T) {
+	rendered := RenderStatusStyled(detector.Scenario{
+		Name:    "Feishu API auth/scope/token error",
+		Matched: []string{"docx:document:read", "missing required scope"},
+	}, "LarkApiError: missing required scope: docx:document:read\ntenant_access_token invalid", 100)
+	for _, want := range []string{"lark-cue detection", "DETECTED", "Feishu API auth/scope/token error", "Error excerpt", "LarkApiError", "Signals", "• docx:document:read", "Searching Feishu"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("styled status missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
 func TestPartialRetrievalKeepsEvidenceCauseAndAddsCaveat(t *testing.T) {
 	scenario, _ := detector.Detect("missing required scope: docx:document:read")
 	card := Build(context.Background(), Input{

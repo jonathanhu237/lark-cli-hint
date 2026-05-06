@@ -190,7 +190,6 @@ func RenderStyled(k KnowledgeCard, width int) string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(accent)
 	label := lipgloss.NewStyle().Bold(true).Foreground(muted)
 	body := lipgloss.NewStyle().Foreground(text).Width(contentWidth)
-	sectionTitle := lipgloss.NewStyle().Bold(true).Foreground(accent).MarginTop(1)
 	metaStyle := lipgloss.NewStyle().Foreground(muted)
 	highPill := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#071B10")).Background(ok).Padding(0, 1)
 	lowPill := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#271B04")).Background(warn).Padding(0, 1)
@@ -216,14 +215,15 @@ func RenderStyled(k KnowledgeCard, width int) string {
 	sections = append(sections, renderStyledKV(label, body, "Likely cause", valueOr(k.LikelyCause, "未找到足够证据判断具体原因。"), contentWidth))
 	sections = append(sections, renderStyledKV(label, body, "Next action", valueOr(k.NextAction, "检查飞书开放平台应用权限、token 状态和本地授权状态后重试。"), contentWidth))
 
-	sections = append(sections, sectionTitle.Render("Evidence"))
+	evidenceBlock := []string{label.Render("Evidence")}
 	if len(k.Citations) == 0 {
-		sections = append(sections, body.Render("没有找到可支撑结论的内部来源。"))
+		evidenceBlock = append(evidenceBlock, body.Render("没有找到可支撑结论的内部来源。"))
 	} else {
 		for i, citation := range k.Citations {
-			sections = append(sections, renderStyledCitation(i+1, citation, contentWidth, accent, muted))
+			evidenceBlock = append(evidenceBlock, renderStyledCitation(i+1, citation, contentWidth, accent, muted))
 		}
 	}
+	sections = append(sections, strings.Join(evidenceBlock, "\n"))
 
 	confidence := "Low. 未找到足够强的内部知识证据。"
 	switch k.Confidence {
@@ -242,7 +242,43 @@ func RenderStyled(k KnowledgeCard, width int) string {
 
 	meta := fmt.Sprintf("command: %s  |  sources: %d  |  queries: %d", k.Command, len(k.Citations), k.QueryCount)
 	sections = append(sections, metaStyle.Width(contentWidth).Render(wrapText(meta, contentWidth)))
-	return box.Render(strings.Join(sections, "\n")) + "\n"
+	return box.Render(strings.Join(sections, "\n\n")) + "\n"
+}
+
+func RenderStatusStyled(scenario detector.Scenario, output string, width int) string {
+	if width < 60 {
+		return fmt.Sprintf("\nlark-cue: detected %s; searching Feishu knowledge...\n", scenario.Name)
+	}
+	cardWidth := clamp(width-4, 72, 104)
+	contentWidth := cardWidth - 6
+
+	accent := lipgloss.Color("#5A7CFF")
+	muted := lipgloss.Color("#7C8798")
+	text := lipgloss.Color("#E7EAF0")
+	ok := lipgloss.Color("#2EAD6B")
+
+	box := lipgloss.NewStyle().
+		Width(cardWidth).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(accent).
+		Padding(1, 2)
+	title := lipgloss.NewStyle().Bold(true).Foreground(accent).Render("lark-cue detection")
+	badge := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#071B10")).Background(ok).Padding(0, 1).Render("DETECTED")
+	label := lipgloss.NewStyle().Bold(true).Foreground(muted)
+	body := lipgloss.NewStyle().Foreground(text).Width(contentWidth)
+
+	lines := []string{
+		title + "  " + badge,
+		renderStyledKV(label, body, "Scenario", scenario.Name, contentWidth),
+	}
+	if excerpt := failureExcerpt(output, scenario.Matched, 2); excerpt != "" {
+		lines = append(lines, renderStyledKV(label, body, "Error excerpt", excerpt, contentWidth))
+	}
+	if len(scenario.Matched) > 0 {
+		lines = append(lines, renderStyledKV(label, body, "Signals", renderBulletList(scenario.Matched, contentWidth), contentWidth))
+	}
+	lines = append(lines, renderStyledKV(label, body, "Next", "Searching Feishu Docs/Wiki and IM evidence...", contentWidth))
+	return box.Render(strings.Join(lines, "\n\n")) + "\n"
 }
 
 func citationFrom(item evidence.ScoredSource) Citation {
@@ -264,6 +300,19 @@ func renderStyledKV(labelStyle, bodyStyle lipgloss.Style, key, value string, wid
 	return labelStyle.Render(key) + "\n" + bodyStyle.Render(wrapText(value, width))
 }
 
+func renderBulletList(values []string, width int) string {
+	var lines []string
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		wrapped := wrapText(value, width-2)
+		lines = append(lines, "• "+strings.ReplaceAll(wrapped, "\n", "\n  "))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func renderStyledCitation(index int, c Citation, width int, accent, muted lipgloss.Color) string {
 	number := lipgloss.NewStyle().Bold(true).Foreground(accent).Render(fmt.Sprintf("%d.", index))
 	source := citationSourceLabel(c)
@@ -278,6 +327,44 @@ func renderStyledCitation(index int, c Citation, width int, accent, muted lipglo
 	summary := valueOr(c.Summary, "无摘要")
 	detail := lipgloss.NewStyle().Foreground(muted).Width(width - 4).Render(wrapText(summary, width-4))
 	return number + " " + strings.ReplaceAll(sourceLine, "\n", "\n   ") + "\n" + indent(detail, "   ")
+}
+
+func failureExcerpt(output string, matched []string, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	var needles []string
+	for _, match := range matched {
+		match = strings.TrimSpace(strings.ToLower(match))
+		if match != "" {
+			needles = append(needles, match)
+		}
+	}
+	if len(needles) == 0 {
+		return ""
+	}
+	var lines []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		lower := strings.ToLower(line)
+		for _, needle := range needles {
+			if strings.Contains(lower, needle) {
+				if !seen[line] {
+					lines = append(lines, line)
+					seen[line] = true
+				}
+				break
+			}
+		}
+		if len(lines) >= maxLines {
+			break
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func citationSourceLabel(c Citation) string {
