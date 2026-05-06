@@ -40,6 +40,11 @@ type Summary struct {
 	PlannerSkip       int
 	PlannerUnknown    int
 	AveragePlannerMS  float64
+	OpenClawAttempted int
+	OpenClawSucceeded int
+	OpenClawFailed    int
+	OpenClawSkipped   int
+	AverageOpenClawMS float64
 	MalformedLines    int
 	Limit             int
 }
@@ -186,12 +191,30 @@ func SummarizeResult(result ReadResult, limit int) Summary {
 			feedback = "unknown"
 		}
 		summary.FeedbackCounts[feedback]++
+		if record.OpenClawAttempted != nil {
+			if *record.OpenClawAttempted {
+				summary.OpenClawAttempted++
+				if record.OpenClawSucceeded != nil && *record.OpenClawSucceeded {
+					summary.OpenClawSucceeded++
+				} else {
+					summary.OpenClawFailed++
+				}
+				if record.OpenClawLatencyMS != nil {
+					summary.AverageOpenClawMS += float64(*record.OpenClawLatencyMS)
+				}
+			} else if strings.TrimSpace(record.OpenClawSkippedReason) != "" {
+				summary.OpenClawSkipped++
+			}
+		}
 	}
 	if summary.TotalRuns > 0 {
 		count := float64(summary.TotalRuns)
 		summary.AverageSources = float64(summary.TotalSources) / count
 		summary.AverageQueryCount /= count
 		summary.AverageLatencyMS /= count
+	}
+	if summary.OpenClawAttempted > 0 {
+		summary.AverageOpenClawMS /= float64(summary.OpenClawAttempted)
 	}
 	for _, record := range result.PlannerRecords {
 		summary.PlannerRuns++
@@ -260,6 +283,17 @@ func RenderSummary(summary Summary) string {
 	fmt.Fprintf(&b, "Runtime\n")
 	fmt.Fprintf(&b, "- avg latency: %s\n", formatMillis(summary.AverageLatencyMS))
 	fmt.Fprintf(&b, "- avg queries/run: %.1f\n", summary.AverageQueryCount)
+	if summary.OpenClawAttempted > 0 || summary.OpenClawSkipped > 0 {
+		b.WriteString("\n")
+		fmt.Fprintf(&b, "OpenClaw\n")
+		fmt.Fprintf(&b, "- attempted: %d\n", summary.OpenClawAttempted)
+		fmt.Fprintf(&b, "- succeeded: %d\n", summary.OpenClawSucceeded)
+		fmt.Fprintf(&b, "- failed: %d\n", summary.OpenClawFailed)
+		fmt.Fprintf(&b, "- skipped: %d\n", summary.OpenClawSkipped)
+		if summary.OpenClawAttempted > 0 {
+			fmt.Fprintf(&b, "- avg OpenClaw latency: %s\n", formatMillis(summary.AverageOpenClawMS))
+		}
+	}
 	if summary.MalformedLines > 0 {
 		fmt.Fprintf(&b, "\nWarnings\n- skipped malformed log lines: %d\n", summary.MalformedLines)
 	}
@@ -318,6 +352,15 @@ func RenderSummaryStyled(summary Summary, width int) string {
 		renderKV(label, body, "Evidence", fmt.Sprintf("Citation coverage: %d/%d (%s)\nSources: %d total, %.1f per run", summary.RunsWithSources, summary.TotalRuns, percent(summary.RunsWithSources, summary.TotalRuns), summary.TotalSources, summary.AverageSources)),
 		renderKV(label, body, "Runtime", fmt.Sprintf("Average latency: %s\nAverage queries/run: %.1f", formatMillis(summary.AverageLatencyMS), summary.AverageQueryCount)),
 	)
+	if summary.OpenClawAttempted > 0 || summary.OpenClawSkipped > 0 {
+		openClawLines := fmt.Sprintf("Attempted %d / succeeded %d / failed %d / skipped %d", summary.OpenClawAttempted, summary.OpenClawSucceeded, summary.OpenClawFailed, summary.OpenClawSkipped)
+		if summary.OpenClawAttempted > 0 {
+			openClawLines += fmt.Sprintf("\nAverage OpenClaw latency: %s", formatMillis(summary.AverageOpenClawMS))
+		}
+		sections = append(sections,
+			renderKV(label, body, "OpenClaw", openClawLines),
+		)
+	}
 	if summary.MalformedLines > 0 {
 		sections = append(sections, warnStyle.Render(fmt.Sprintf("Warnings: skipped %d malformed log line(s).", summary.MalformedLines)))
 	}

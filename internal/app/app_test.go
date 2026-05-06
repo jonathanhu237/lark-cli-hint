@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"lark-cue/internal/config"
 	"lark-cue/internal/eval"
 	"lark-cue/internal/llm"
+	"lark-cue/internal/openclaw"
 	"lark-cue/internal/retrieval"
 )
 
@@ -47,7 +49,7 @@ func TestRunHelpWritesStdoutAndSucceeds(t *testing.T) {
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "Usage:") || strings.Contains(stdout.String(), "--no-feedback-prompt") {
+	if !strings.Contains(stdout.String(), "Usage:") || !strings.Contains(stdout.String(), "--no-openclaw") || strings.Contains(stdout.String(), "--no-feedback-prompt") {
 		t.Fatalf("unexpected run help:\n%s", stdout.String())
 	}
 }
@@ -93,6 +95,61 @@ func TestSendPushRequiresExplicitFlag(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), "Feishu push sent") || strings.Contains(stderr.String(), "failed to send Feishu push") || strings.Contains(stderr.String(), "push send requested") {
 		t.Fatalf("config default attempted send, stderr=%q", stderr.String())
+	}
+}
+
+func TestRunPreflightsOpenClawBeforeExecutingCommand(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	installRunFakes(t, fakeCueProvider{}, fakeRetriever{})
+	preflightErr := errors.New("openclaw missing")
+	newOpenClawClient = func(cfg config.OpenClawConfig) openClawClient {
+		return &fakeOpenClawClient{preflightErr: preflightErr}
+	}
+	marker := filepath.Join(t.TempDir(), "ran")
+
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{
+		"run",
+		"--",
+		"sh", "-c", "touch " + marker,
+	}, strings.NewReader(""), &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("code = %d, want 2", code)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("wrapped command appears to have executed; stat err=%v", err)
+	}
+	for _, want := range []string{"OpenClaw is required by default", "--no-openclaw"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr.String())
+		}
+	}
+}
+
+func TestRunNoOpenClawSkipsPreflightAndInvocation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("LARK_CUE_EVAL_LOG", filepath.Join(t.TempDir(), "eval.jsonl"))
+	fakeOpenClaw := installRunFakes(t, fakeCueProvider{
+		decision: flowOpsDecision(),
+		cardErr:  errors.New("use fallback"),
+	}, fakeRetriever{sources: flowOpsSources(), status: retrieval.StatusOK})
+	fakeOpenClaw.preflightErr = errors.New("should not be called")
+
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{
+		"run",
+		"--no-openclaw",
+		"--",
+		"sh", "-c", "echo 'FlowOps DAG import error billing_daily billing_region Variable.get' >&2; exit 1",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("code = %d, want wrapped command exit 1", code)
+	}
+	if fakeOpenClaw.preflightCalled || fakeOpenClaw.invokeCalled {
+		t.Fatalf("OpenClaw should be skipped, preflight=%v invoke=%v", fakeOpenClaw.preflightCalled, fakeOpenClaw.invokeCalled)
+	}
+	if !strings.Contains(stderr.String(), "lark-cue knowledge card") {
+		t.Fatalf("card should still render in card-only mode:\n%s", stderr.String())
 	}
 }
 
@@ -234,6 +291,90 @@ func TestRunKeepsKnowledgeCardOffStdout(t *testing.T) {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr missing early LLM plan field %q:\n%s", want, stderr.String())
 		}
+	}
+}
+
+func TestRunInvokesOpenClawAfterCardAndPreservesExitCode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	logPath := filepath.Join(t.TempDir(), "eval.jsonl")
+	t.Setenv("LARK_CUE_EVAL_LOG", logPath)
+	fakeOpenClaw := installRunFakes(t, fakeCueProvider{
+		decision: flowOpsDecision(),
+		cardErr:  errors.New("use fallback"),
+	}, fakeRetriever{sources: flowOpsSources(), status: retrieval.StatusOK})
+	fakeOpenClaw.output = "openclaw stdout\nopenclaw stderr\n"
+	fakeOpenClaw.result = openclaw.Result{Attempted: true, Succeeded: false, ExitCode: 7, Error: "agent failed", LatencyMS: 25}
+
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{
+		"run",
+		"--",
+		"sh", "-c", "echo command-output; echo 'FlowOps DAG import error billing_daily billing_region Variable.get' >&2; exit 1",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("code = %d, want wrapped command exit 1", code)
+	}
+	if strings.TrimSpace(stdout.String()) != "command-output" {
+		t.Fatalf("stdout was polluted: %q", stdout.String())
+	}
+	if !fakeOpenClaw.preflightCalled || !fakeOpenClaw.invokeCalled {
+		t.Fatalf("OpenClaw calls = preflight %v invoke %v", fakeOpenClaw.preflightCalled, fakeOpenClaw.invokeCalled)
+	}
+	cardAt := strings.Index(stderr.String(), "lark-cue knowledge card")
+	openClawAt := strings.Index(stderr.String(), "openclaw stdout")
+	if cardAt < 0 || openClawAt < 0 || cardAt > openClawAt {
+		t.Fatalf("OpenClaw output should appear after card:\n%s", stderr.String())
+	}
+	for _, want := range []string{
+		"Working directory:",
+		"Failed command: sh -c",
+		"FlowOps DAG Import Error 排障 FAQ",
+		"Ask the user before deleting data",
+	} {
+		if !strings.Contains(fakeOpenClaw.task, want) {
+			t.Fatalf("OpenClaw task missing %q:\n%s", want, fakeOpenClaw.task)
+		}
+	}
+	if !strings.Contains(stderr.String(), "OpenClaw handoff failed: agent failed") {
+		t.Fatalf("stderr missing OpenClaw failure diagnostic:\n%s", stderr.String())
+	}
+	result, err := eval.ReadCueRecords(logPath)
+	if err != nil {
+		t.Fatalf("ReadCueRecords error: %v", err)
+	}
+	if len(result.Records) != 1 {
+		t.Fatalf("cue records len = %d, want 1", len(result.Records))
+	}
+	record := result.Records[0]
+	if record.OpenClawAttempted == nil || !*record.OpenClawAttempted || record.OpenClawSucceeded == nil || *record.OpenClawSucceeded || record.OpenClawError != "agent failed" {
+		t.Fatalf("OpenClaw eval fields = %+v", record)
+	}
+}
+
+func TestRunPlannerSkipDoesNotInvokeOpenClaw(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	fakeOpenClaw := installRunFakes(t, fakeCueProvider{
+		decision: llm.PlanDecision{
+			ShouldRetrieve: false,
+			Scenario:       "local file path error",
+			Reason:         "missing local file",
+		},
+	}, &recordingRetriever{})
+
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{
+		"run",
+		"--",
+		"sh", "-c", "echo \"python: can't open file missing.py\" >&2; exit 2",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("code = %d, want wrapped command exit 2", code)
+	}
+	if !fakeOpenClaw.preflightCalled {
+		t.Fatal("default mode should preflight OpenClaw before executing command")
+	}
+	if fakeOpenClaw.invokeCalled {
+		t.Fatal("OpenClaw was invoked for planner skip")
 	}
 }
 
@@ -422,6 +563,34 @@ func TestBenchmarkRunPassesAndKeepsNormalEvalLogClean(t *testing.T) {
 	}
 }
 
+func TestBenchmarkRunNoOpenClawSkipsPreflight(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	casesPath := writeBenchmarkCases(t, `{"cases":[{
+		"id":"flowops-dag-import",
+		"command":["sh","-c","echo 'FlowOps DAG import error billing_daily billing_region Variable.get' >&2; exit 1"],
+		"expect_failure":true,
+		"expected_sources":["FlowOps DAG Import Error 排障 FAQ"]
+	}]}`)
+	fakeOpenClaw := installRunFakes(t, fakeCueProvider{
+		decision: flowOpsDecision(),
+		cardErr:  errors.New("use fallback"),
+	}, fakeRetriever{sources: flowOpsSources(), status: retrieval.StatusOK})
+	fakeOpenClaw.preflightErr = errors.New("should not be called")
+
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"benchmark", "run", "--no-openclaw", "--cases", casesPath}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%s\nstdout=%s", code, stderr.String(), stdout.String())
+	}
+	if fakeOpenClaw.preflightCalled || fakeOpenClaw.invokeCalled {
+		t.Fatalf("OpenClaw should be skipped, preflight=%v invoke=%v", fakeOpenClaw.preflightCalled, fakeOpenClaw.invokeCalled)
+	}
+	if !strings.Contains(stdout.String(), "PASS flowops-dag-import") {
+		t.Fatalf("stdout missing pass:\n%s", stdout.String())
+	}
+}
+
 func TestBenchmarkRunExecutesSetupAndTeardown(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
@@ -595,20 +764,30 @@ func TestBenchmarkRunFailsMissingCueAndExpectedFailureMismatch(t *testing.T) {
 	}
 }
 
-func installRunFakes(t *testing.T, provider fakeCueProvider, retriever retrieval.Retriever) {
+func installRunFakes(t *testing.T, provider fakeCueProvider, retriever retrieval.Retriever) *fakeOpenClawClient {
 	t.Helper()
 	oldProvider := newPlannerProvider
 	oldRetriever := newRetriever
+	oldOpenClaw := newOpenClawClient
+	fakeOpenClaw := &fakeOpenClawClient{
+		result: openclaw.Result{Attempted: true, Succeeded: true, ExitCode: 0},
+	}
 	newPlannerProvider = func(cfg config.LLMConfig) (cueProvider, error) {
 		return provider, nil
 	}
 	newRetriever = func(cfg config.FeishuConfig) retrieval.Retriever {
 		return retriever
 	}
+	newOpenClawClient = func(cfg config.OpenClawConfig) openClawClient {
+		fakeOpenClaw.cfg = cfg
+		return fakeOpenClaw
+	}
 	t.Cleanup(func() {
 		newPlannerProvider = oldProvider
 		newRetriever = oldRetriever
+		newOpenClawClient = oldOpenClaw
 	})
+	return fakeOpenClaw
 }
 
 func writeBenchmarkCases(t *testing.T, body string) string {
@@ -668,6 +847,34 @@ type capturingRetriever struct {
 	sources []retrieval.Source
 	status  retrieval.Status
 	err     error
+}
+
+type fakeOpenClawClient struct {
+	cfg             config.OpenClawConfig
+	preflightErr    error
+	preflightCalled bool
+	invokeCalled    bool
+	task            string
+	output          string
+	result          openclaw.Result
+}
+
+func (f *fakeOpenClawClient) Preflight(ctx context.Context) error {
+	f.preflightCalled = true
+	return f.preflightErr
+}
+
+func (f *fakeOpenClawClient) Invoke(ctx context.Context, task string, stderr io.Writer) openclaw.Result {
+	f.invokeCalled = true
+	f.task = task
+	if f.output != "" {
+		_, _ = io.WriteString(stderr, f.output)
+	}
+	result := f.result
+	if !result.Attempted {
+		result.Attempted = true
+	}
+	return result
 }
 
 func (r *capturingRetriever) Retrieve(ctx context.Context, queries []string) ([]retrieval.Source, retrieval.Status, error) {

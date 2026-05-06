@@ -1,23 +1,32 @@
 # terminal-knowledge-cue Specification
 
 ## Purpose
-`terminal-knowledge-cue` covers the `lark-cue` terminal workflow: wrapping developer commands, requiring LLM-planned failed-command knowledge decisions, retrieving cited Feishu knowledge through `lark-cli`, rendering actionable knowledge cards, controlling optional Feishu push side effects, and recording planner/cue evaluation data for demo validation.
+`terminal-knowledge-cue` covers the `lark-cue` terminal workflow: wrapping developer commands, requiring LLM-planned failed-command knowledge decisions, retrieving cited Feishu knowledge through `lark-cli`, rendering actionable knowledge cards, handing generated cards to OpenClaw by default, controlling optional Feishu push side effects, and recording planner/cue/OpenClaw evaluation data for demo validation.
 
 ## Requirements
 ### Requirement: Command Wrapper
-The system SHALL provide a `lark-cue run -- <command>` CLI flow that requires LLM configuration before executing the wrapped command, streams stdout and stderr to the terminal in real time, captures a bounded output buffer for analysis, and returns the wrapped command exit code after any cue handling.
+The system SHALL provide a `lark-cue run -- <command>` CLI flow that requires LLM configuration before executing the wrapped command, requires OpenClaw preflight before executing the wrapped command unless `--no-openclaw` is set, streams stdout and stderr to the terminal in real time, captures a bounded output buffer for analysis, and returns the wrapped command exit code after any cue and OpenClaw handling.
 
 #### Scenario: Missing LLM configuration blocks execution
 - **WHEN** the user runs `lark-cue run -- <command>` without required LLM configuration
 - **THEN** the system MUST print a clear configuration error and MUST NOT execute the wrapped command
 
+#### Scenario: Missing OpenClaw configuration blocks default execution
+- **WHEN** the user runs `lark-cue run -- <command>` without `--no-openclaw` and OpenClaw preflight fails
+- **THEN** the system MUST print a clear OpenClaw configuration error and MUST NOT execute the wrapped command
+- **AND** the system MUST exit with code `2`
+
+#### Scenario: Card-only mode does not require OpenClaw
+- **WHEN** the user runs `lark-cue run --no-openclaw -- <command>`
+- **THEN** the system MUST NOT require OpenClaw preflight before executing the wrapped command
+
 #### Scenario: Successful command does not trigger a cue
 - **WHEN** a wrapped command exits with code `0`
-- **THEN** the system MUST return exit code `0` and MUST NOT run the planner, Feishu knowledge retrieval, or display a knowledge card
+- **THEN** the system MUST return exit code `0` and MUST NOT run the planner, Feishu knowledge retrieval, display a knowledge card, or invoke OpenClaw
 
 #### Scenario: Failed command preserves exit code
 - **WHEN** a wrapped command exits non-zero
-- **THEN** the system MUST preserve and return the wrapped command exit code even if planning, retrieval, or card generation succeeds
+- **THEN** the system MUST preserve and return the wrapped command exit code even if planning, retrieval, card generation, or post-card OpenClaw invocation succeeds
 
 #### Scenario: Output is streamed while captured
 - **WHEN** a wrapped command writes stdout or stderr before exiting
@@ -32,7 +41,7 @@ The system SHALL use a configured LLM planner to decide whether a failed wrapped
 
 #### Scenario: Planner skips retrieval
 - **WHEN** a wrapped command exits non-zero and the LLM planner returns `should_retrieve: false`
-- **THEN** the system MUST NOT call `lark-cli` retrieval, MUST NOT render a knowledge card, MUST print a short non-intrusive skip message, and MUST preserve the wrapped command exit code
+- **THEN** the system MUST NOT call `lark-cli` retrieval, MUST NOT render a knowledge card, MUST NOT invoke OpenClaw, MUST print a short non-intrusive skip message, and MUST preserve the wrapped command exit code
 
 #### Scenario: Planner output is recorded
 - **WHEN** the planner returns a decision for a failed command
@@ -127,7 +136,7 @@ The system SHALL provide terminal card delivery as the default required path and
 - **THEN** the system MAY send the prepared message through `lark-cli`
 
 ### Requirement: Configuration
-The system SHALL support environment-variable and local-file configuration, with environment variables taking precedence, SHALL require LLM configuration for `lark-cue run`, and SHALL allow runtime Feishu retrieval to use the same `lark-cli` profile used for demo seeding.
+The system SHALL support environment-variable and local-file configuration, with environment variables taking precedence, SHALL require LLM configuration for `lark-cue run`, SHALL require OpenClaw configuration for default `lark-cue run`, SHALL allow `--no-openclaw` to disable OpenClaw for a run, and SHALL allow runtime Feishu retrieval to use the same `lark-cli` profile used for demo seeding.
 
 #### Scenario: Environment overrides config
 - **WHEN** a value is present both in the local config file and in a supported `LARK_CUE_*` environment variable
@@ -137,12 +146,20 @@ The system SHALL support environment-variable and local-file configuration, with
 - **WHEN** a Feishu profile is configured for `lark-cue`
 - **THEN** runtime retrieval and explicit push sending MUST pass that profile to `lark-cli`
 
+#### Scenario: OpenClaw defaults are available
+- **WHEN** OpenClaw configuration is not explicitly set
+- **THEN** the system MUST default to binary `openclaw`, agent `main`, local mode enabled, and timeout `900` seconds
+
+#### Scenario: OpenClaw can be disabled per run
+- **WHEN** the user provides `--no-openclaw`
+- **THEN** the system MUST skip OpenClaw preflight and OpenClaw invocation for that run
+
 #### Scenario: Fixture mode is not available as product path
 - **WHEN** the user runs `lark-cue run`
 - **THEN** the system MUST NOT expose or silently activate local fixture retrieval
 
 ### Requirement: Evaluation Logging
-The system SHALL create local evaluation records for planner decisions and cue attempts and SHALL NOT interrupt `run` with interactive feedback prompts.
+The system SHALL create local evaluation records for planner decisions, cue attempts, and OpenClaw handoff attempts and SHALL NOT interrupt `run` with interactive feedback prompts.
 
 #### Scenario: Planner event is recorded
 - **WHEN** the planner decides whether to retrieve internal knowledge for a failed command
@@ -150,7 +167,15 @@ The system SHALL create local evaluation records for planner decisions and cue a
 
 #### Scenario: Cue event is recorded
 - **WHEN** a knowledge card is generated
-- **THEN** the system MUST append a JSONL evaluation record containing card id, command, scenario, retrieval status, cited sources, latency, query count, confidence, and feedback state
+- **THEN** the system MUST append a JSONL evaluation record containing card id, command, scenario, retrieval status, cited sources, latency, query count, confidence, feedback state, and OpenClaw handoff status
+
+#### Scenario: OpenClaw result is recorded when attempted
+- **WHEN** OpenClaw handoff is attempted for a cue
+- **THEN** the cue evaluation record MUST include whether OpenClaw was attempted, whether it succeeded, latency, and any compact error or timeout status
+
+#### Scenario: OpenClaw skip reason is recorded
+- **WHEN** OpenClaw handoff is skipped for a generated cue because `--no-openclaw` is set
+- **THEN** the cue evaluation record MUST include that OpenClaw was not attempted and MUST include the skip reason
 
 #### Scenario: Run never prompts for feedback
 - **WHEN** a knowledge card is displayed
@@ -162,6 +187,10 @@ The system SHALL provide a read-only `lark-cue eval report` flow that summarizes
 #### Scenario: Report summarizes cue records
 - **WHEN** the evaluation log contains recent `type: "cue"` records
 - **THEN** the report MUST display run count, retrieval status counts, citation coverage, average source count, average query count, and average latency
+
+#### Scenario: Report summarizes OpenClaw handoffs
+- **WHEN** cue records contain OpenClaw handoff fields
+- **THEN** the report MUST display OpenClaw attempted, succeeded, failed, skipped, and average OpenClaw latency metrics
 
 #### Scenario: Report summarizes planner decisions
 - **WHEN** the evaluation log contains recent planner decision records

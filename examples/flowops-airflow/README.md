@@ -12,6 +12,14 @@ examples/flowops-airflow/scripts/install-flowctl
 
 The install script is safe to run repeatedly: it skips installation when a `flowctl` command already exists in `PATH`.
 
+Default `lark-cue run -- <command>` also requires OpenClaw. Ensure `openclaw` is on `PATH` and verify the agent CLI before recording the default demo:
+
+```sh
+openclaw agent --help
+```
+
+The default post-card handoff uses the local `main` agent with a 900 second timeout. Use `--no-openclaw` when you want to run only the terminal knowledge card locally; that mode skips OpenClaw preflight and skips the post-card handoff.
+
 ## One-Time Setup
 
 From this directory:
@@ -43,10 +51,16 @@ Expected terminal context includes Airflow import-error output for `billing_dail
 
 ## lark-cue Demo Run
 
-After seeding the Feishu demo knowledge from the repository root, run:
+After seeding the Feishu demo knowledge from the repository root, run the default OpenClaw path:
 
 ```sh
 lark-cue run -- flowctl check billing_daily
+```
+
+For local card-only inspection without OpenClaw:
+
+```sh
+lark-cue run --no-openclaw -- flowctl check billing_daily
 ```
 
 For the contest recording, keep the command prompt visible and show the generated knowledge card with:
@@ -55,6 +69,9 @@ For the contest recording, keep the command prompt visible and show the generate
 - likely parse-time Variable lookup cause;
 - an ordered action plan, such as moving Variable access into task runtime, using configuration only as a short-term unblock, and rerunning the failing check;
 - citations to the 星桥科技 FlowOps mock docs.
+- the default OpenClaw handoff after the card, using the local `main` agent.
+
+OpenClaw should inspect local state and verify changes, but it is not allowed to silently perform high-risk actions. It should ask before deleting data, changing production configuration, rotating secrets, sending messages, committing code, pushing code, or performing similar external side effects.
 
 ## Benchmark
 
@@ -62,6 +79,12 @@ From the repository root:
 
 ```sh
 lark-cue benchmark run --cases examples/flowops-airflow/seed/eval-cases.json
+```
+
+Use `--no-openclaw` for a local card-only benchmark run:
+
+```sh
+lark-cue benchmark run --no-openclaw --cases examples/flowops-airflow/seed/eval-cases.json
 ```
 
 The benchmark runs the real `flowctl check billing_daily` failure through `lark-cue run`, uses a temporary evaluation log, and checks whether the final card cites the expected seeded Wiki titles. The case runs `flowctl init` first as lightweight setup. It does not run `flowctl clean`; use that manually when you want a full reset before recording.

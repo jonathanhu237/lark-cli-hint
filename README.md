@@ -16,6 +16,22 @@ export LARK_CUE_LLM_MODEL="..."
 export LARK_CUE_LLM_BASE_URL="https://api.openai.com/v1"
 ```
 
+- OpenClaw is required for the default `lark-cue run -- <command>` path. The run command preflights OpenClaw before executing the wrapped command, then hands the cited knowledge card to the local OpenClaw agent after card rendering when the planner selects internal-knowledge retrieval.
+
+Ensure the `openclaw` binary is on `PATH` and the agent CLI is available:
+
+```sh
+openclaw agent --help
+```
+
+The MVP default is the local `main` agent with a 900 second timeout:
+
+```sh
+openclaw agent --local --agent main --timeout 900 --message "<task>"
+```
+
+Use `--no-openclaw` for card-only mode. That skips both the OpenClaw preflight and the post-card handoff.
+
 Configure a seed-only `lark-cli` profile in `~/.lark-cue/config.toml` before writing demo knowledge:
 
 ```toml
@@ -40,6 +56,7 @@ go install ./cmd/lark-cue
 examples/flowops-airflow/scripts/install-flowctl  # installs only when flowctl is missing
 lark-cue version
 flowctl help
+openclaw agent --help
 ```
 
 If `lark-cue` or `flowctl` is not found after install, add Go's bin directory to `PATH`:
@@ -62,7 +79,11 @@ cd examples/flowops-airflow
 cp .env.example .env
 flowctl init
 
+# Default demo path: card, then OpenClaw local main-agent handoff.
 lark-cue run -- flowctl check billing_daily
+
+# Local card-only path: skip OpenClaw preflight and handoff.
+lark-cue run --no-openclaw -- flowctl check billing_daily
 ```
 
 See `docs/demo.md` and `examples/flowops-airflow/README.md` for the full recorded-demo flow.
@@ -73,7 +94,7 @@ To benchmark whether the seeded Wiki sources are actually cited for the real Flo
 lark-cue benchmark run --cases examples/flowops-airflow/seed/eval-cases.json
 ```
 
-The benchmark uses an isolated temporary evaluation log, runs real commands, and returns `0` only when every case passes. The FlowOps case runs `flowctl init` as lightweight setup. Run `flowctl clean` manually when you need a full reset.
+The benchmark uses an isolated temporary evaluation log, runs real commands, and returns `0` only when every case passes. The FlowOps case runs `flowctl init` as lightweight setup. Use `--no-openclaw` for a card-only benchmark run. Run `flowctl clean` manually when you need a full reset.
 
 ## Evaluation
 
@@ -81,7 +102,11 @@ The benchmark uses an isolated temporary evaluation log, runs real commands, and
 lark-cue eval report
 ```
 
-The report summarizes planner decisions, cue runs, retrieval status, citation coverage, latency, and query count.
+The report summarizes planner decisions, cue runs, retrieval status, citation coverage, latency, query count, and OpenClaw handoff attempts/results when present.
+
+## Safety
+
+OpenClaw receives the failed command context, planner output, knowledge card, action plan, and Feishu citations so it can inspect and repair the local workspace. The handoff is not permission to perform high-risk external actions without asking first. OpenClaw should ask before deleting data, changing production configuration, rotating secrets, sending messages, committing code, or pushing code.
 
 ## Current Limitation
 

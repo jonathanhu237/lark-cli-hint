@@ -55,7 +55,18 @@ type KnowledgeCard struct {
 	QueryCount      int
 	Feedback        string
 	LatencyMS       int64
+	OpenClaw        OpenClawHandoff
 	CreatedAt       time.Time
+}
+
+type OpenClawHandoff struct {
+	Attempted     bool
+	Succeeded     bool
+	SkippedReason string
+	TimedOut      bool
+	ExitCode      int
+	Error         string
+	LatencyMS     int64
 }
 
 type Citation struct {

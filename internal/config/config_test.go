@@ -56,3 +56,41 @@ func TestLoadSeedConfig(t *testing.T) {
 		t.Fatalf("seed wiki = %q", cfg.Seed.WikiName)
 	}
 }
+
+func TestLoadOpenClawDefaultsConfigAndEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load defaults error: %v", err)
+	}
+	if cfg.OpenClaw.Binary != "openclaw" || cfg.OpenClaw.TimeoutSeconds != 900 {
+		t.Fatalf("unexpected defaults: %+v", cfg.OpenClaw)
+	}
+
+	configDir := filepath.Join(home, ".lark-cue")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[openclaw]\nbinary = \"oc\"\ntimeout_seconds = 120\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load config error: %v", err)
+	}
+	if cfg.OpenClaw.Binary != "oc" || cfg.OpenClaw.TimeoutSeconds != 120 {
+		t.Fatalf("unexpected config values: %+v", cfg.OpenClaw)
+	}
+
+	t.Setenv("LARK_CUE_OPENCLAW_BINARY", "openclaw-test")
+	t.Setenv("LARK_CUE_OPENCLAW_TIMEOUT_SECONDS", "30")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load env error: %v", err)
+	}
+	if cfg.OpenClaw.Binary != "openclaw-test" || cfg.OpenClaw.TimeoutSeconds != 30 {
+		t.Fatalf("unexpected env values: %+v", cfg.OpenClaw)
+	}
+}

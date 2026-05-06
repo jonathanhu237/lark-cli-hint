@@ -22,6 +22,7 @@ import (
 	"lark-cue/internal/evidence"
 	"lark-cue/internal/larkcli"
 	"lark-cue/internal/llm"
+	"lark-cue/internal/openclaw"
 	"lark-cue/internal/push"
 	"lark-cue/internal/retrieval"
 	"lark-cue/internal/runner"
@@ -35,6 +36,7 @@ type runOptions struct {
 	sendPush    bool
 	pushChat    string
 	verbose     bool
+	noOpenClaw  bool
 }
 
 type evalReportOptions struct {
@@ -42,8 +44,9 @@ type evalReportOptions struct {
 }
 
 type benchmarkRunOptions struct {
-	casesPath string
-	verbose   bool
+	casesPath  string
+	verbose    bool
+	noOpenClaw bool
 }
 
 type cueProvider interface {
@@ -61,6 +64,15 @@ var newPlannerProvider = func(cfg config.LLMConfig) (cueProvider, error) {
 
 var newRetriever = func(cfg config.FeishuConfig) retrieval.Retriever {
 	return retrieval.NewLarkRetriever(larkcli.NewWithProfile("lark-cli", cfg.Profile))
+}
+
+type openClawClient interface {
+	Preflight(context.Context) error
+	Invoke(context.Context, string, io.Writer) openclaw.Result
+}
+
+var newOpenClawClient = func(cfg config.OpenClawConfig) openClawClient {
+	return openclaw.New(cfg)
 }
 
 var readCueRecords = eval.ReadCueRecords
@@ -124,6 +136,8 @@ func parseRunArgs(args []string) (runOptions, error) {
 			opts.sendPush = true
 		case "--verbose":
 			opts.verbose = true
+		case "--no-openclaw":
+			opts.noOpenClaw = true
 		case "--push-chat":
 			if i+1 >= len(args) {
 				return opts, errors.New("--push-chat requires a chat id or chat name")
@@ -181,6 +195,8 @@ func parseBenchmarkRunArgs(args []string) (benchmarkRunOptions, error) {
 			opts.casesPath = args[i]
 		case "--verbose":
 			opts.verbose = true
+		case "--no-openclaw":
+			opts.noOpenClaw = true
 		case "-h", "--help":
 			return opts, errHelp
 		default:
@@ -198,6 +214,17 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 	if err != nil {
 		fmt.Fprintf(stderr, "lark-cue: %v\n", err)
 		return 2
+	}
+
+	openClawEnabled := !opts.noOpenClaw
+	var openClaw openClawClient
+	if openClawEnabled {
+		openClaw = newOpenClawClient(cfg.OpenClaw)
+		if err := openClaw.Preflight(ctx); err != nil {
+			fmt.Fprintf(stderr, "lark-cue: OpenClaw is required by default but is not available: %v\n", err)
+			fmt.Fprintln(stderr, "lark-cue: install/configure OpenClaw, or rerun with --no-openclaw for card-only mode.")
+			return 2
+		}
 	}
 
 	result, err := runner.Run(ctx, opts.command, runner.Streams{
@@ -319,6 +346,41 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 		fmt.Fprint(cueOutput, card.Render(kcard))
 	}
 
+	if openClawEnabled {
+		cwd, _ := os.Getwd()
+		task := openclaw.BuildTask(openclaw.TaskInput{
+			WorkingDir:      cwd,
+			Command:         opts.command,
+			ExitCode:        result.ExitCode,
+			Output:          analysisOutput,
+			PlannerScenario: decision.Scenario,
+			PlannerReason:   decision.Reason,
+			Queries:         queries,
+			Card:            kcard,
+			Evidence:        selected,
+		})
+		fmt.Fprintf(cueOutput, "\nlark-cue: invoking OpenClaw agent %s...\n", openclaw.DefaultAgent)
+		openClawResult := openClaw.Invoke(ctx, task, cueOutput)
+		kcard.OpenClaw = card.OpenClawHandoff{
+			Attempted: true,
+			Succeeded: openClawResult.Succeeded,
+			TimedOut:  openClawResult.TimedOut,
+			ExitCode:  openClawResult.ExitCode,
+			Error:     openClawResult.Error,
+			LatencyMS: openClawResult.LatencyMS,
+		}
+		switch {
+		case openClawResult.Succeeded:
+			fmt.Fprintln(cueOutput, "lark-cue: OpenClaw handoff finished.")
+		case openClawResult.TimedOut:
+			fmt.Fprintf(cueOutput, "lark-cue: OpenClaw handoff timed out after %d seconds; preserving wrapped command exit code %d.\n", cfg.OpenClaw.TimeoutSeconds, result.ExitCode)
+		default:
+			fmt.Fprintf(cueOutput, "lark-cue: OpenClaw handoff failed: %s; preserving wrapped command exit code %d.\n", firstNonEmpty(openClawResult.Error, "unknown error"), result.ExitCode)
+		}
+	} else if opts.noOpenClaw {
+		kcard.OpenClaw = card.OpenClawHandoff{SkippedReason: "--no-openclaw"}
+	}
+
 	if opts.preparePush || opts.sendPush || cfg.Feishu.SendPushDefault {
 		target := firstNonEmpty(opts.pushChat, cfg.Feishu.DefaultPushChat)
 		renderedPush := push.Prepare(kcard)
@@ -400,7 +462,7 @@ func runBenchmark(ctx context.Context, cfg config.Config, opts benchmarkRunOptio
 
 	results := make([]benchmark.CaseResult, 0, len(cases))
 	for _, c := range cases {
-		observation, err := runBenchmarkCase(ctx, benchCfg, c, opts.verbose)
+		observation, err := runBenchmarkCase(ctx, benchCfg, c, opts)
 		if err != nil {
 			fmt.Fprintf(stderr, "lark-cue benchmark: %v\n", err)
 			return 2
@@ -431,7 +493,7 @@ func setBenchmarkEvalLogEnv(path string) func() {
 	}
 }
 
-func runBenchmarkCase(ctx context.Context, cfg config.Config, c benchmark.Case, verbose bool) (benchmark.Observation, error) {
+func runBenchmarkCase(ctx context.Context, cfg config.Config, c benchmark.Case, opts benchmarkRunOptions) (benchmark.Observation, error) {
 	observation := benchmark.Observation{CommandExitCode: -1}
 	setupOutput, setupErr := runBenchmarkSetup(ctx, c.Setup)
 	observation.SetupOutput = setupOutput
@@ -448,8 +510,9 @@ func runBenchmarkCase(ctx context.Context, cfg config.Config, c benchmark.Case, 
 	}
 	var stdout, stderr bytes.Buffer
 	observation.CommandExitCode = runCommand(ctx, cfg, runOptions{
-		command: c.Command,
-		verbose: verbose,
+		command:    c.Command,
+		verbose:    opts.verbose,
+		noOpenClaw: opts.noOpenClaw,
 	}, strings.NewReader(""), &stdout, &stderr)
 	observation.CommandOutput = stdout.String() + stderr.String()
 	after, err := readCueRecords(cfg.Evaluation.LogPath)
@@ -644,11 +707,14 @@ Requires LLM config:
   LARK_CUE_LLM_API_KEY and LARK_CUE_LLM_MODEL
 Optional Feishu profile:
   LARK_CUE_FEISHU_PROFILE to pass --profile to lark-cli retrieval and push sending
+OpenClaw is required by default:
+  install/configure openclaw, or pass --no-openclaw for card-only mode
 
 Flags:
   --prepare-push        Print a Feishu group message preview
   --send-push           Send the prepared message through lark-cli
   --push-chat <target>  Feishu chat id or chat name for push sending
+  --no-openclaw         Skip OpenClaw preflight and post-card handoff
   --verbose             Print LLM/retrieval diagnostics without secrets`)
 }
 
@@ -674,6 +740,7 @@ func printBenchmarkRunHelp(w io.Writer) {
 
 Flags:
   --cases <path>  Benchmark case JSON file
+  --no-openclaw   Skip OpenClaw preflight and post-card handoff for benchmark cases
   --verbose       Include compact command diagnostics in the report`)
 }
 

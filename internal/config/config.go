@@ -13,6 +13,7 @@ type Config struct {
 	Feishu     FeishuConfig
 	Seed       SeedConfig
 	Evaluation EvaluationConfig
+	OpenClaw   OpenClawConfig
 }
 
 type LLMConfig struct {
@@ -36,6 +37,11 @@ type EvaluationConfig struct {
 	LogPath string
 }
 
+type OpenClawConfig struct {
+	Binary         string
+	TimeoutSeconds int
+}
+
 func Load() (Config, error) {
 	home, _ := os.UserHomeDir()
 	cfg := Config{
@@ -44,6 +50,10 @@ func Load() (Config, error) {
 		},
 		Evaluation: EvaluationConfig{
 			LogPath: filepath.Join(home, ".lark-cue", "evaluations.jsonl"),
+		},
+		OpenClaw: OpenClawConfig{
+			Binary:         "openclaw",
+			TimeoutSeconds: 900,
 		},
 	}
 
@@ -100,6 +110,12 @@ func loadFile(path string, cfg *Config) error {
 			cfg.Seed.WikiName = value
 		case "evaluation.log_path":
 			cfg.Evaluation.LogPath = value
+		case "openclaw.binary":
+			cfg.OpenClaw.Binary = value
+		case "openclaw.timeout_seconds":
+			if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+				cfg.OpenClaw.TimeoutSeconds = parsed
+			}
 		}
 	}
 	return scanner.Err()
@@ -126,6 +142,14 @@ func applyEnv(cfg *Config) {
 	}
 	if value := os.Getenv("LARK_CUE_EVAL_LOG"); value != "" {
 		cfg.Evaluation.LogPath = value
+	}
+	if value := os.Getenv("LARK_CUE_OPENCLAW_BINARY"); value != "" {
+		cfg.OpenClaw.Binary = value
+	}
+	if value := os.Getenv("LARK_CUE_OPENCLAW_TIMEOUT_SECONDS"); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			cfg.OpenClaw.TimeoutSeconds = parsed
+		}
 	}
 }
 

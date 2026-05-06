@@ -40,6 +40,9 @@ func TestCueRecordIncludesRequiredReportFields(t *testing.T) {
 		QueryCount:      2,
 		LatencyMS:       0,
 		Feedback:        "skipped",
+		OpenClaw: card.OpenClawHandoff{
+			SkippedReason: "--no-openclaw",
+		},
 	}))
 	if err != nil {
 		t.Fatalf("Append error: %v", err)
@@ -67,6 +70,44 @@ func TestCueRecordIncludesRequiredReportFields(t *testing.T) {
 	}
 	if record["feedback"] != "skipped" {
 		t.Fatalf("feedback = %#v, want skipped", record["feedback"])
+	}
+	if record["openclaw_attempted"] != false || record["openclaw_skipped_reason"] != "--no-openclaw" {
+		t.Fatalf("openclaw fields = attempted %#v skip %#v", record["openclaw_attempted"], record["openclaw_skipped_reason"])
+	}
+}
+
+func TestCueRecordIncludesOpenClawAttemptFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "evaluations.jsonl")
+	err := Append(path, FromCard(card.KnowledgeCard{
+		ID:              "cue_test",
+		Command:         "flowctl check billing_daily",
+		Scenario:        "FlowOps DAG import error",
+		RetrievalStatus: retrieval.StatusOK,
+		Feedback:        "skipped",
+		OpenClaw: card.OpenClawHandoff{
+			Attempted: true,
+			Succeeded: false,
+			TimedOut:  true,
+			ExitCode:  124,
+			Error:     "OpenClaw invocation timed out",
+			LatencyMS: 900000,
+		},
+	}))
+	if err != nil {
+		t.Fatalf("Append error: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile error: %v", err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(bytesTrimSpace(data), &record); err != nil {
+		t.Fatalf("Unmarshal error: %v\n%s", err, string(data))
+	}
+	for _, key := range []string{"openclaw_attempted", "openclaw_succeeded", "openclaw_timed_out", "openclaw_exit_code", "openclaw_error", "openclaw_latency_ms"} {
+		if _, ok := record[key]; !ok {
+			t.Fatalf("%s missing from record: %s", key, string(data))
+		}
 	}
 }
 
@@ -117,6 +158,32 @@ func TestReadCueRecordsAggregatesFeedbackAndMalformedLines(t *testing.T) {
 	}
 	if summary.AverageQueryCount != 3 {
 		t.Fatalf("AverageQueryCount = %v, want 3", summary.AverageQueryCount)
+	}
+}
+
+func TestReadCueRecordsSummarizesOpenClaw(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "evaluations.jsonl")
+	lines := []string{
+		`{"type":"cue","card_id":"cue_1","retrieval_status":"ok","sources":[],"latency_ms":1000,"query_count":2,"feedback":"skipped","openclaw_attempted":true,"openclaw_succeeded":true,"openclaw_latency_ms":3000,"created_at":"2026-05-06T00:00:00Z"}`,
+		`{"type":"cue","card_id":"cue_2","retrieval_status":"ok","sources":[],"latency_ms":1000,"query_count":2,"feedback":"skipped","openclaw_attempted":true,"openclaw_succeeded":false,"openclaw_error":"failed","openclaw_latency_ms":1000,"created_at":"2026-05-06T00:00:01Z"}`,
+		`{"type":"cue","card_id":"cue_3","retrieval_status":"ok","sources":[],"latency_ms":1000,"query_count":2,"feedback":"skipped","openclaw_attempted":false,"openclaw_skipped_reason":"--no-openclaw","created_at":"2026-05-06T00:00:02Z"}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
+	result, err := ReadCueRecords(path)
+	if err != nil {
+		t.Fatalf("ReadCueRecords error: %v", err)
+	}
+	summary := SummarizeResult(result, DefaultReportLimit)
+	if summary.OpenClawAttempted != 2 || summary.OpenClawSucceeded != 1 || summary.OpenClawFailed != 1 || summary.OpenClawSkipped != 1 || summary.AverageOpenClawMS != 2000 {
+		t.Fatalf("openclaw summary = %+v", summary)
+	}
+	report := RenderSummary(summary)
+	for _, want := range []string{"OpenClaw", "attempted: 2", "succeeded: 1", "failed: 1", "skipped: 1", "avg OpenClaw latency: 2.0s"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
 	}
 }
 

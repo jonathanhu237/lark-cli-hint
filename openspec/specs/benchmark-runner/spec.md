@@ -30,6 +30,10 @@ The system SHALL execute each benchmark case through real local commands and the
 - **WHEN** a case command is executed
 - **THEN** the system MUST run it as the wrapped command path equivalent to `lark-cue run -- <command>`
 
+#### Scenario: Benchmark card-only mode skips OpenClaw
+- **WHEN** the user runs `lark-cue benchmark run --no-openclaw --cases <path>`
+- **THEN** each benchmark case MUST run through the wrapped command path with OpenClaw preflight and post-card handoff disabled
+
 #### Scenario: Teardown runs after case attempt
 - **WHEN** a case defines one or more `teardown` commands
 - **THEN** the system MUST attempt those commands after the case attempt even when the case fails

@@ -9,6 +9,7 @@ real internal-style CLI command fails
 -> lark-cue searches Docs/Wiki/Sheets and IM through lark-cli
 -> lark-cue fetches/reads evidence
 -> lark-cue prints a short cited knowledge card
+-> by default, lark-cue hands the card and evidence to OpenClaw local main agent
 -> lark-cue records planner/cue evaluation data
 ```
 
@@ -36,6 +37,20 @@ export LARK_CUE_LLM_API_KEY="..."
 export LARK_CUE_LLM_MODEL="..."
 export LARK_CUE_LLM_BASE_URL="https://api.openai.com/v1"
 ```
+
+Configure OpenClaw for the default run path. `lark-cue run -- <command>` preflights OpenClaw before it executes the wrapped command unless you pass `--no-openclaw`.
+
+```sh
+openclaw agent --help
+```
+
+The MVP invokes the local `main` agent after the knowledge card is rendered:
+
+```sh
+openclaw agent --local --agent main --timeout 900 --message "<task>"
+```
+
+Use `lark-cue run --no-openclaw -- <command>` when you want card-only mode for local testing. This skips OpenClaw preflight and skips the post-card handoff.
 
 Check Feishu access:
 
@@ -110,7 +125,7 @@ For a clean recorded demo, isolate evaluation records:
 export LARK_CUE_EVAL_LOG="$(mktemp -t lark-cue-flowops-evaluations.XXXXXX)"
 ```
 
-Run:
+Run the default OpenClaw demo path:
 
 ```sh
 lark-cue run -- flowctl check billing_daily
@@ -118,12 +133,22 @@ lark-cue run -- flowctl check billing_daily
 
 Expected behavior:
 
+- before `flowctl check billing_daily` starts, `lark-cue` verifies that `openclaw agent --help` can run;
 - the original FlowOps/Airflow error remains visible;
 - `lark-cue` shows the planner-selected FlowOps scenario;
 - the knowledge card shows the LLM planner reason and generated keyword queries;
 - those queries search real Feishu Docs/Wiki/Sheets and IM;
 - the knowledge card cites FlowOps seed documents when retrieval succeeds;
 - if evidence is weak, the card says so instead of inventing a cause.
+- when a card is generated, `lark-cue` invokes OpenClaw with the local `main` agent and a 900 second timeout, streaming OpenClaw output to stderr while preserving the wrapped command exit code.
+
+Run the local card-only path when OpenClaw is not installed or when you only want to inspect the card:
+
+```sh
+lark-cue run --no-openclaw -- flowctl check billing_daily
+```
+
+In card-only mode, `lark-cue` still requires LLM configuration and Feishu access, but it does not preflight or invoke OpenClaw.
 
 Then show validation:
 
@@ -143,6 +168,14 @@ lark-cue benchmark run --cases examples/flowops-airflow/seed/eval-cases.json
 
 The benchmark runs real commands through the same `lark-cue run -- <command>` path, writes planner/cue records to a temporary evaluation log, and scores exact citation-title matches against the seeded Wiki titles declared in `eval-cases.json`. The FlowOps case uses `flowctl init` as lightweight setup. It does not run automatically from tests because it depends on Docker, LLM access, Feishu access, and local indexing state.
 
+For local benchmark runs that should avoid OpenClaw, pass the benchmark opt-out:
+
+```sh
+lark-cue benchmark run --no-openclaw --cases examples/flowops-airflow/seed/eval-cases.json
+```
+
+Keep the default benchmark command for the contest story where OpenClaw is part of the active handoff.
+
 ## Optional Push Preview
 
 Preview a Feishu group card without sending:
@@ -156,6 +189,8 @@ Actual sending requires an explicit send flag and target:
 ```sh
 lark-cue run --send-push --push-chat "oc_xxx" -- flowctl check billing_daily
 ```
+
+OpenClaw does not make Feishu sending implicit. Sending a group push still requires the explicit send flag and target. The same safety boundary applies to other high-risk actions: OpenClaw should ask before deleting data, changing production configuration, rotating secrets, sending messages, committing code, pushing code, or performing similar external side effects.
 
 ## Cleanup
 

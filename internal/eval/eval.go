@@ -11,20 +11,27 @@ import (
 )
 
 type Record struct {
-	Type            string          `json:"type"`
-	CardID          string          `json:"card_id"`
-	Command         string          `json:"command"`
-	Scenario        string          `json:"scenario"`
-	Reason          string          `json:"reason,omitempty"`
-	ShouldRetrieve  *bool           `json:"should_retrieve,omitempty"`
-	RetrievalStatus string          `json:"retrieval_status"`
-	RetrievalError  string          `json:"retrieval_error,omitempty"`
-	Sources         []card.Citation `json:"sources"`
-	Confidence      string          `json:"confidence,omitempty"`
-	LatencyMS       int64           `json:"latency_ms"`
-	QueryCount      int             `json:"query_count"`
-	Feedback        string          `json:"feedback"`
-	CreatedAt       time.Time       `json:"created_at"`
+	Type                  string          `json:"type"`
+	CardID                string          `json:"card_id"`
+	Command               string          `json:"command"`
+	Scenario              string          `json:"scenario"`
+	Reason                string          `json:"reason,omitempty"`
+	ShouldRetrieve        *bool           `json:"should_retrieve,omitempty"`
+	RetrievalStatus       string          `json:"retrieval_status"`
+	RetrievalError        string          `json:"retrieval_error,omitempty"`
+	Sources               []card.Citation `json:"sources"`
+	Confidence            string          `json:"confidence,omitempty"`
+	LatencyMS             int64           `json:"latency_ms"`
+	QueryCount            int             `json:"query_count"`
+	Feedback              string          `json:"feedback"`
+	OpenClawAttempted     *bool           `json:"openclaw_attempted,omitempty"`
+	OpenClawSucceeded     *bool           `json:"openclaw_succeeded,omitempty"`
+	OpenClawSkippedReason string          `json:"openclaw_skipped_reason,omitempty"`
+	OpenClawTimedOut      bool            `json:"openclaw_timed_out,omitempty"`
+	OpenClawExitCode      *int            `json:"openclaw_exit_code,omitempty"`
+	OpenClawError         string          `json:"openclaw_error,omitempty"`
+	OpenClawLatencyMS     *int64          `json:"openclaw_latency_ms,omitempty"`
+	CreatedAt             time.Time       `json:"created_at"`
 }
 
 func FromCard(k card.KnowledgeCard) Record {
@@ -32,7 +39,10 @@ func FromCard(k card.KnowledgeCard) Record {
 	if sources == nil {
 		sources = []card.Citation{}
 	}
-	return Record{
+	attempted := k.OpenClaw.Attempted
+	succeeded := k.OpenClaw.Succeeded
+	latency := k.OpenClaw.LatencyMS
+	record := Record{
 		Type:            "cue",
 		CardID:          k.ID,
 		Command:         k.Command,
@@ -46,6 +56,17 @@ func FromCard(k card.KnowledgeCard) Record {
 		Feedback:        k.Feedback,
 		CreatedAt:       k.CreatedAt,
 	}
+	record.OpenClawAttempted = &attempted
+	record.OpenClawSkippedReason = k.OpenClaw.SkippedReason
+	if attempted {
+		record.OpenClawSucceeded = &succeeded
+		record.OpenClawLatencyMS = &latency
+		record.OpenClawTimedOut = k.OpenClaw.TimedOut
+		record.OpenClawError = k.OpenClaw.Error
+		exitCode := k.OpenClaw.ExitCode
+		record.OpenClawExitCode = &exitCode
+	}
+	return record
 }
 
 func FromPlanner(command string, decision llm.PlanDecision, latencyMS int64) Record {
