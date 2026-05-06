@@ -4,235 +4,149 @@
 
 This project is for the Feishu OpenClaw AI Campus Challenge, OpenClaw track.
 
-The repository name and CLI name are both:
+Repository name and CLI name:
 
 ```text
 lark-cue
 ```
 
-The track asks participants to build an office agent with long-term memory and active service capability using Feishu OpenClaw, `lark-cli`, the Feishu ecosystem, and large model capabilities.
-
-The selected topic is:
-
-**Enterprise office knowledge integration and distribution agent.**
-
-The selected sub-direction is:
-
-**Direction C: immersive fragmented knowledge push assistant for geek and developer experience.**
+The product is an active enterprise knowledge assistant for developers working in terminal-heavy internal workflows.
 
 ## Problem
 
-In an enterprise, valuable knowledge is scattered across Feishu Docs, wiki pages, meeting Minutes, group chats, tasks, and mail. The problem is usually not that knowledge does not exist. The problem is that developers do not know where to search, what keyword to use, or which historical discussion contains the answer.
+Enterprise developers often debug internal platforms through CLI commands, but the answer is scattered across Feishu Docs, Wiki, group messages, postmortems, and checklists. The difficult part is not only searching; it is deciding whether the current failure depends on internal knowledge and which keywords will find the right fragment.
 
-Traditional knowledge management is passive:
-
-- The user must know that a relevant document exists.
-- The user must guess the right keyword.
-- The user must leave the current workflow to search.
-- The user must read long documents or noisy chats to extract the real answer.
-
-This is especially painful for developers working in the terminal. When a command fails, the useful answer may be hidden in an old Feishu group discussion, an onboarding document, or a meeting conclusion. Manual search interrupts the workflow and often leads to repeated questions in team groups.
+Manual search is slow because the developer must leave the terminal, explain the failure, guess keywords, and read long documents or noisy chat history.
 
 ## Product Positioning
 
-`lark-cue` is an active enterprise knowledge assistant for developers.
+`lark-cue` wraps a command and stays close to the terminal. When the command fails, it asks an LLM planner whether this failure should retrieve internal Feishu knowledge. If yes, the planner emits short keyword-style Feishu queries; `lark-cue` searches Docs/Wiki/Sheets and IM through `lark-cli`, fetches evidence, and prints a compact cited knowledge card.
 
-It stays close to the CLI workflow. When a developer hits a terminal error, executes a risky command, or enters a known workflow checkpoint, the assistant proactively retrieves relevant Feishu knowledge, compresses it into a high-density knowledge card, and delivers it in the terminal or Feishu group.
-
-The product is not a general search box. It is a contextual knowledge delivery assistant.
+The product is not a generic search box and not a hardcoded rule library. It is a contextual internal knowledge cue assistant.
 
 ## Target Users
 
-Primary users:
-
-- Developers in enterprise teams.
-- New team members who are unfamiliar with internal systems.
-- AI coding agents or human developers using CLI-heavy workflows.
-
-Secondary users:
-
-- Team leads who want to reduce repeated troubleshooting questions.
-- On-call engineers who want known fixes to be distributed faster.
-- Knowledge maintainers who want docs and historical discussions to be reused.
+- Enterprise developers using internal CLIs.
+- New team members unfamiliar with internal platforms.
+- On-call engineers who need historical fixes quickly.
+- Teams that want Feishu knowledge to be reused instead of repeatedly asked in groups.
 
 ## Core Value
 
-The assistant should reduce the distance between a developer's current problem and the team's existing knowledge.
+The assistant should answer:
 
-It should provide:
+1. Does this failure need internal knowledge?
+2. What scenario is probably happening?
+3. Which Feishu knowledge is relevant now?
+4. What is the shortest safe next step?
+5. Which sources support the suggestion?
 
-- Faster troubleshooting.
-- Fewer repeated questions in Feishu groups.
-- Better reuse of internal Docs, Minutes, and chat history.
-- More reliable answers because every suggestion cites sources.
-- A stronger sense that enterprise knowledge can actively serve the workflow.
+Every confident suggestion must be grounded in fetched/read Feishu evidence.
 
-## Why Search or Chatbot Is Not Enough
+## Main Demo Story
 
-Generic search is not enough because the developer may not know the right keyword or source.
-
-Generic Q&A is not enough because it waits for the user to ask and may answer without enough context.
-
-A normal chatbot is not enough because it is outside the developer's flow. The user must switch context, explain the error, paste logs, and verify sources manually.
-
-This product should instead use the terminal event itself as context, then proactively push a small, sourced answer.
-
-## Demo Story
-
-Recommended demo:
+The main demo uses 星桥科技's internal scheduling platform, FlowOps, backed locally by a real Airflow container.
 
 ```text
-A developer runs a command that interacts with Feishu APIs.
-The command fails with an auth/scope/token error.
-The assistant detects the error pattern from the terminal output.
-It searches Feishu Docs and historical group messages through lark-cli.
-It finds an internal permission setup guide and a past discussion of the same error.
-It produces a short knowledge card:
-  - detected issue
-  - likely cause
-  - next action
-  - source citations
-The card appears in the terminal.
-Optionally, a summarized card is pushed to a Feishu group for team visibility.
-The user can mark the hint useful or not useful for evaluation.
+developer runs flowctl check billing_daily
+-> real Airflow reports a DAG import error
+-> lark-cue planner decides this needs internal FlowOps knowledge
+-> planner emits keyword queries such as billing_daily billing_region Variable.get
+-> lark-cue searches Feishu Docs/Wiki/Sheets and IM through lark-cli
+-> lark-cue cites FlowOps FAQ / historical incident / development standard docs
+-> lark-cue recommends moving Variable.get out of DAG parse time or applying a short-term Variable unblock
+-> evaluation report shows planner decisions, retrieval, citations, latency, and feedback
 ```
 
-Example command shape:
-
-```bash
-lark-cue run -- pnpm dev
-```
-
-This demo fits the contest because it shows:
-
-- Long-term memory: the assistant reuses past documents and discussions.
-- Active service: the assistant triggers from the terminal error.
-- Knowledge integration: it connects Docs, messages, and possibly Minutes.
-- Knowledge distribution: it pushes a compact card to terminal or Feishu group.
-- Measurable value: it can compare manual search time against automatic hint time.
+This demo is more convincing than a hardcoded Feishu API error because it shows a real internal-app-style CLI failure and internal knowledge reuse.
 
 ## Knowledge Sources
 
-Potential Feishu sources:
+Current retrieval routes:
 
-- Docs and wiki pages for official troubleshooting guides.
-- Group messages for historical bug discussions.
-- Minutes for meeting conclusions and action items.
-- Tasks for implementation context and ownership.
-- Mail only if a later scenario clearly needs it.
+- Docs/Wiki/Sheets through `lark-cli docs +search`
+- IM through `lark-cli im +messages-search`
 
-For the first demo, Docs plus group messages are enough.
+The first FlowOps seed creates Markdown documents only. IM retrieval remains enabled for real tenants and future seeded group discussions.
 
 ## lark-cli Role
 
-`lark-cli` should be used as the bridge to Feishu.
+`lark-cli` is the Feishu bridge. `lark-cue` uses it to search and fetch internal sources, and optionally to send a prepared group push when the user explicitly requests sending.
 
-Useful capabilities may include:
+`lark-cue` should not become a tutorial for `lark-cli`; it uses `lark-cli` as infrastructure for active internal knowledge delivery.
 
-- Search or fetch Docs/wiki content.
-- Search group messages or retrieve message context.
-- Read Minutes summaries or transcripts.
-- Send or prepare Feishu group messages.
-- Check auth state and available scopes.
+## LLM Role
 
-The product should not center on teaching `lark-cli` usage. It should use `lark-cli` as infrastructure to build an active knowledge assistant.
+LLM configuration is required.
+
+The LLM planner decides:
+
+- whether to retrieve internal knowledge;
+- a short human-readable scenario;
+- a short reason for the decision;
+- keyword-style Feishu search queries.
+
+The LLM may also draft card text, but card claims are accepted only when grounded in fetched snippets.
 
 ## Knowledge Card Shape
 
-A terminal knowledge card should be compact:
+Cards should stay compact:
 
 ```text
 Scenario
-Detected Feishu API permission error.
+FlowOps DAG import error
 
 Likely Cause
-The app token is valid, but the required scope was not granted after the last permission change.
+billing_daily reads billing_region while the DAG is imported, so FlowOps cannot finish DagBag parsing.
 
 Next Action
-Run the scope check, then re-login with recommended permissions if the scope is missing.
+Move Variable.get("billing_region") into task runtime, or set billing_region only as a short-term unblock; rerun flowctl check billing_daily.
 
-Sources
-- Feishu Doc: Internal API Permission Setup Guide
-- Group: Backend Troubleshooting, 2026-04-28
+Evidence
+- FlowOps DAG Import Error 排障 FAQ
+- billing_daily 历史故障复盘
 
 Confidence
-High, because both the error output and historical discussion mention the same missing scope pattern.
+High, because the evidence mentions the same DAG, variable, and repair path.
 ```
 
-The card should not be a long answer. It should be a workflow aid.
+If evidence is weak or absent, the card must say that internal evidence is insufficient.
 
 ## MVP Scope
 
-Build one complete loop:
-
 ```text
-trigger -> classify scenario -> retrieve Feishu knowledge -> compress into card -> deliver -> record feedback
+run command -> command fails -> LLM planner -> Feishu retrieval -> evidence-grounded card -> feedback/eval
 ```
 
 MVP requirements:
 
-- A CLI wrapper or watcher that can capture command output.
-- At least one deterministic trigger, preferably command failure with known error pattern.
-- Retrieval from at least one Feishu source through `lark-cli`.
-- A knowledge card with citations.
-- A terminal delivery path.
-- Optional Feishu group delivery path.
-- A simple evaluation log.
+- command wrapper with stdout/stderr passthrough and exit-code preservation;
+- mandatory LLM planner;
+- real `lark-cli` retrieval;
+- cited terminal card;
+- optional explicit Feishu push;
+- evaluation report;
+- reproducible FlowOps/Airflow demo and Feishu seed script.
 
-## Out of Scope for MVP
+## Out of Scope
 
-The MVP should not attempt:
-
-- Full enterprise-wide indexing.
-- Support for every terminal error.
-- Automatic execution of repair commands.
-- A complex GUI terminal.
-- A general-purpose RAG platform.
-- Broad multi-source ranking before the first demo is convincing.
+- Semantic/vector search.
+- Per-application hardcoded detector rules.
+- Automatic repair command execution.
+- Broad indexing across all Feishu surfaces.
+- GUI terminal.
+- Public local fixture mode.
 
 ## Effect Validation
 
-The effect validation report should answer three questions.
+The effect validation report should show:
 
-### Accuracy
+- planner decisions and retrieve-vs-skip counts;
+- cue runs;
+- retrieval status;
+- citation coverage;
+- average query count;
+- average latency;
+- useful / not-useful feedback.
 
-How often does the assistant produce a correct and source-supported hint?
-
-Possible metric:
-
-- Human rating from 1 to 5.
-- Whether cited sources actually support the suggestion.
-- Whether the suggested next action is safe and relevant.
-
-### Efficiency
-
-How much time does it save compared with manual search?
-
-Possible metric:
-
-- Manual search time for the same issue.
-- Assistant response time.
-- Number of documents or messages the user had to open.
-
-### Acceptance
-
-Do users actually use the pushed knowledge?
-
-Possible metric:
-
-- Useful / not useful feedback.
-- Card click or copy count.
-- Whether the user follows the suggested next action.
-- Whether the issue is resolved faster in the demo task.
-
-## Product Principle
-
-The best version of this project is not the one that connects the most APIs. It is the one that makes one developer moment clearly better:
-
-```text
-I hit a problem.
-The assistant recognized it.
-It found the team's existing answer.
-It gave me the shortest safe next step.
-It showed where the answer came from.
-```
+The demo should be judged by whether `lark-cue` shortens the path from a real internal-style CLI failure to a cited internal answer.

@@ -1,0 +1,11 @@
+/.airflowignore
+/.env
+/airflow.cfg
+/airflow.db
+/airflow.db-*
+/logs/
+/plugins/
+/tmp/
+/.tmp/
+__pycache__/
+*.py[cod]

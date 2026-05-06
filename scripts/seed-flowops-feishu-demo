@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APPLY=0
+PROFILE=""
+FOLDER_TOKEN=""
+AS_IDENTITY="user"
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  scripts/seed-flowops-feishu-demo [--apply] [--profile NAME] [--folder-token TOKEN] [--as user|bot]
+
+Defaults to dry-run and prints planned Feishu Markdown writes.
+
+Options:
+  --apply              Create or update the three FlowOps demo Markdown files.
+  --profile NAME       Pass --profile NAME to lark-cli.
+  --folder-token TOKEN Create new Markdown files in this Drive folder when missing.
+  --as user|bot        Identity for markdown writes. Default: user.
+  -h, --help           Show this help.
+
+The script never sends IM messages, deletes files, or writes unless --apply is set.
+USAGE
+}
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --apply)
+      APPLY=1
+      shift
+      ;;
+    --profile)
+      PROFILE="${2:-}"
+      [[ -n "${PROFILE}" ]] || { echo "--profile requires a value" >&2; exit 2; }
+      shift 2
+      ;;
+    --folder-token)
+      FOLDER_TOKEN="${2:-}"
+      [[ -n "${FOLDER_TOKEN}" ]] || { echo "--folder-token requires a value" >&2; exit 2; }
+      shift 2
+      ;;
+    --as)
+      AS_IDENTITY="${2:-}"
+      [[ "${AS_IDENTITY}" == "user" || "${AS_IDENTITY}" == "bot" ]] || { echo "--as must be user or bot" >&2; exit 2; }
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+LARK=(lark-cli)
+if [[ -n "${PROFILE}" ]]; then
+  LARK+=(--profile "${PROFILE}")
+fi
+
+print_lark_command() {
+  local prefix="${1:-}"
+  shift || true
+  printf '%s' "${prefix}"
+  printf 'lark-cli'
+  if [[ -n "${PROFILE}" ]]; then
+    printf ' --profile '
+    print_shell_arg "${PROFILE}"
+  fi
+  for arg in "$@"; do
+    printf ' '
+    print_shell_arg "${arg}"
+  done
+  printf '\n'
+}
+
+print_shell_arg() {
+  local value="${1//\'/\'\\\'\'}"
+  printf "'%s'" "${value}"
+}
+
+if [[ "${APPLY}" -eq 1 ]]; then
+  if ! command -v lark-cli >/dev/null 2>&1; then
+    echo "lark-cli is required. Install and authenticate it before applying the seed." >&2
+    exit 127
+  fi
+
+  if ! "${LARK[@]}" markdown +create --help >/dev/null 2>&1 ||
+     ! "${LARK[@]}" markdown +overwrite --help >/dev/null 2>&1 ||
+     ! "${LARK[@]}" docs +search --help >/dev/null 2>&1; then
+    echo "This script requires lark-cli markdown +create, markdown +overwrite, and docs +search." >&2
+    exit 2
+  fi
+fi
+
+TMP_DIR="$(mktemp -d)"
+cleanup() {
+  rm -rf "${TMP_DIR}"
+}
+trap cleanup EXIT
+
+write_doc() {
+  local filename="$1"
+  local title="$2"
+  local body="$3"
+  local path="${TMP_DIR}/${filename}"
+
+  printf '%s\n' "${body}" > "${path}"
+
+  if [[ "${APPLY}" -eq 0 ]]; then
+    echo "[dry-run] would search existing Markdown doc: ${title}"
+    echo "[dry-run] would create or overwrite from: ${path}"
+    print_lark_command "          " docs +search --query "${title}" --page-size 10 --format json
+    if [[ -n "${FOLDER_TOKEN}" ]]; then
+      print_lark_command "          " markdown +create --file "${path}" --name "${filename}" --folder-token "${FOLDER_TOKEN}" --as "${AS_IDENTITY}"
+    else
+      print_lark_command "          " markdown +create --file "${path}" --name "${filename}" --as "${AS_IDENTITY}"
+    fi
+    echo
+    return
+  fi
+
+  local search_json
+  search_json="$("${LARK[@]}" docs +search --query "${title}" --page-size 10 --format json --as user)"
+
+  local file_token
+  file_token="$(TITLE="${title}" python3 -c '
+import json, os, sys
+
+title = os.environ["TITLE"]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+
+def clean(value):
+    import re
+    if value is None:
+        return ""
+    return re.sub(r"<[^>]+>", "", str(value)).strip()
+
+def walk(value):
+    if isinstance(value, dict):
+        meta = value.get("result_meta")
+        if not isinstance(meta, dict):
+            meta = {}
+        name = clean(value.get("title_highlighted") or value.get("title") or value.get("name") or value.get("file_name"))
+        token = value.get("file_token") or value.get("token") or meta.get("file_token") or meta.get("token") or meta.get("doc_id")
+        if name in {title, title + ".md"} and token:
+            print(token)
+            raise SystemExit
+        for child in value.values():
+            walk(child)
+    elif isinstance(value, list):
+        for child in value:
+            walk(child)
+
+walk(data)
+' <<<"${search_json}")"
+
+  if [[ -n "${file_token}" ]]; then
+    echo "[apply] overwrite: ${title} (${file_token})"
+    "${LARK[@]}" markdown +overwrite --file-token "${file_token}" --file "${path}" --name "${filename}" --as "${AS_IDENTITY}" --format pretty
+  else
+    echo "[apply] create: ${title}"
+    local create_args=(markdown +create --file "${path}" --name "${filename}" --as "${AS_IDENTITY}" --format pretty)
+    if [[ -n "${FOLDER_TOKEN}" ]]; then
+      create_args+=(--folder-token "${FOLDER_TOKEN}")
+    fi
+    "${LARK[@]}" "${create_args[@]}"
+  fi
+  echo
+}
+
+doc_import_faq='
+# [lark-cue-demo] FlowOps DAG Import Error 排障 FAQ
+
+适用范围：星桥科技 FlowOps 调度平台的 DAG 发布、巡检和本地复现流程。
+
+## 现象
+
+`flowctl check billing_daily` 或发布前巡检出现 DAG import error，终端上下文包含 `billing_daily.py`、`Variable.get("billing_region")`、`billing_region` 不存在等关键词。
+
+## 可能原因
+
+`billing_daily` 在 DAG 文件解析阶段读取 FlowOps Variable。解析阶段运行在调度器、Webserver 和 CLI 的 DAG import 流程里，如果目标环境尚未配置 `billing_region`，DAG 文件会直接导入失败，任务还没有开始运行。
+
+## 推荐处理
+
+优先把 `Variable.get("billing_region")` 移到任务运行时或带默认值的配置加载函数里。若正在处理线上阻塞，可以先在目标 FlowOps 环境补齐 `billing_region` 变量作为短期解法，然后补提交代码修复解析期读取。
+
+## 证据线索
+
+- 内部规则：DAG 顶层代码不得依赖环境内 Variable、连接或外部服务。
+- 排障关键词：`DAG import error`、`billing_daily`、`billing_region`、`Variable.get`、`parse time`。
+- 责任团队：星桥科技 FlowOps 平台组。
+'
+
+doc_incident='
+# [lark-cue-demo] billing_daily 历史故障复盘
+
+复盘编号：FLOWOPS-INC-2026-0418
+
+## 背景
+
+账务团队发布 `billing_daily` 后，FlowOps 巡检在预发环境发现 DAG import error。调度器没有创建当日账务聚合任务，发布窗口被迫暂停。
+
+## 影响
+
+- 预发账务聚合延迟 28 分钟。
+- 发布负责人需要在 FlowOps 控制台和终端之间来回核对错误。
+- 事后确认业务数据未丢失。
+
+## 根因
+
+DAG 文件顶层执行了 `Variable.get("billing_region")`。预发环境没有该变量，Airflow 在解析 DAG 时抛错，导致 `billing_daily` 无法被识别为可调度 DAG。
+
+## 修复结论
+
+1. 顶层只允许声明 DAG、任务和静态常量。
+2. 环境变量、FlowOps Variable、连接信息必须在任务运行时读取。
+3. 发布前必须执行 `flowctl check <dag_id>`，并把 import error 作为阻断项。
+
+## 后续动作
+
+账务团队需要把 region 读取封装进任务函数，并在失败提示里输出当前环境名和缺失变量名。
+'
+
+doc_standards='
+# [lark-cue-demo] FlowOps DAG 开发规范
+
+适用对象：星桥科技所有提交到 FlowOps 的 DAG。
+
+## 解析期规则
+
+- DAG 文件顶层不得调用 `Variable.get`、连接读取、数据库查询或 HTTP 请求。
+- DAG 文件顶层不得依赖只存在于某个环境的配置。
+- DAG import 必须在本地、预发和生产环境保持稳定。
+
+## 推荐写法
+
+- 在任务函数内部读取 `billing_region` 等运行时配置。
+- 对可选配置提供显式默认值，并在任务日志中记录最终值。
+- 对必填配置，在任务开始后抛出带修复建议的错误。
+
+## 发布前检查
+
+```sh
+flowctl check billing_daily
+```
+
+如果出现 import error，先修复 DAG 解析问题，再继续发布。不要通过跳过巡检或直接重启调度器绕过。
+
+## lark-cue 检索提示
+
+当终端出现 `DAG import error`、`billing_daily`、`Variable.get`、`billing_region` 等关键词时，优先检索 FlowOps FAQ、历史故障复盘和本规范。
+'
+
+echo "FlowOps Feishu demo seed"
+if [[ "${APPLY}" -eq 0 ]]; then
+  echo "Mode: dry-run. No Feishu writes will be performed."
+else
+  echo "Mode: apply. Markdown docs may be created or overwritten; no IM messages or deletes are performed."
+fi
+echo
+
+write_doc "[lark-cue-demo] FlowOps DAG Import Error 排障 FAQ.md" "[lark-cue-demo] FlowOps DAG Import Error 排障 FAQ" "${doc_import_faq}"
+write_doc "[lark-cue-demo] billing_daily 历史故障复盘.md" "[lark-cue-demo] billing_daily 历史故障复盘" "${doc_incident}"
+write_doc "[lark-cue-demo] FlowOps DAG 开发规范.md" "[lark-cue-demo] FlowOps DAG 开发规范" "${doc_standards}"
+
+echo "Smoke search commands:"
+print_smoke_command() {
+  local query="$1"
+  printf '  lark-cli'
+  if [[ -n "${PROFILE}" ]]; then
+    printf " --profile '%s'" "${PROFILE//\'/\'\\\'\'}"
+  fi
+  printf " docs +search --query '%s' --page-size 10 --format pretty\n" "${query//\'/\'\\\'\'}"
+}
+
+print_smoke_command "billing_daily Variable.get billing_region"
+print_smoke_command "FlowOps DAG import error"
+print_smoke_command "FlowOps DAG 开发规范"

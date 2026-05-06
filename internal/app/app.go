@@ -21,7 +21,6 @@ import (
 	"lark-cue/internal/larkcli"
 	"lark-cue/internal/llm"
 	"lark-cue/internal/push"
-	"lark-cue/internal/query"
 	"lark-cue/internal/retrieval"
 	"lark-cue/internal/runner"
 )
@@ -30,7 +29,6 @@ const version = "0.1.0"
 
 type runOptions struct {
 	command          []string
-	demoFixture      bool
 	preparePush      bool
 	sendPush         bool
 	pushChat         string
@@ -40,6 +38,23 @@ type runOptions struct {
 
 type evalReportOptions struct {
 	limit int
+}
+
+type cueProvider interface {
+	llm.Planner
+	llm.CardProvider
+}
+
+var newPlannerProvider = func(cfg config.LLMConfig) (cueProvider, error) {
+	provider := llm.NewOpenAICompatible(cfg)
+	if !provider.Available() {
+		return nil, errors.New("LLM configuration is required; set LARK_CUE_LLM_API_KEY and LARK_CUE_LLM_MODEL")
+	}
+	return provider, nil
+}
+
+var newRetriever = func(cfg config.FeishuConfig) retrieval.Retriever {
+	return retrieval.NewLarkRetriever(larkcli.NewWithProfile("lark-cli", cfg.Profile))
 }
 
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -90,8 +105,6 @@ func parseRunArgs(args []string) (runOptions, error) {
 				return opts, errors.New("missing command after --")
 			}
 			return opts, nil
-		case "--demo-fixture":
-			opts.demoFixture = true
 		case "--prepare-push":
 			opts.preparePush = true
 		case "--send-push":
@@ -146,13 +159,17 @@ func parseEvalReportArgs(args []string) (evalReportOptions, error) {
 }
 
 func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin io.Reader, stdout, stderr io.Writer) int {
-	signalBuffer := detector.NewSignalBuffer(8192)
+	provider, err := newPlannerProvider(cfg.LLM)
+	if err != nil {
+		fmt.Fprintf(stderr, "lark-cue: %v\n", err)
+		return 2
+	}
+
 	result, err := runner.Run(ctx, opts.command, runner.Streams{
 		Stdin:  stdin,
 		Stdout: stdout,
 		Stderr: stderr,
 		Buffer: runner.NewBoundedBuffer(256 * 1024),
-		Tap:    signalBuffer,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "lark-cue: failed to run command: %v\n", err)
@@ -162,48 +179,61 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 		return 0
 	}
 
-	analysisOutput := outputWithSignals(result.Output, signalBuffer.String())
-	scenario, ok := detector.Detect(analysisOutput)
-	if !ok {
+	analysisOutput := result.Output
+	started := time.Now()
+	decision, plannerErr := provider.PlanRetrieval(ctx, llm.PlanInput{
+		Command:  opts.command,
+		ExitCode: result.ExitCode,
+		Output:   analysisOutput,
+	})
+	plannerLatency := time.Since(started).Milliseconds()
+	if plannerErr != nil {
+		fmt.Fprintf(stderr, "lark-cue: planner failed: %v\n", plannerErr)
+		return result.ExitCode
+	}
+	decision.Queries = llm.NormalizeQueries(decision.Queries, 8, 120)
+	if !decision.ShouldRetrieve {
+		if strings.TrimSpace(decision.Reason) != "" {
+			fmt.Fprintf(stderr, "\nlark-cue: no internal knowledge lookup recommended: %s\n", decision.Reason)
+		} else {
+			fmt.Fprintln(stderr, "\nlark-cue: no internal knowledge lookup recommended for this failure.")
+		}
+		if err := eval.Append(cfg.Evaluation.LogPath, eval.FromPlanner(runner.CommandString(opts.command), decision, plannerLatency)); err != nil {
+			fmt.Fprintf(stderr, "lark-cue: failed to write evaluation log: %v\n", err)
+		}
+		return result.ExitCode
+	}
+	if len(decision.Queries) == 0 {
+		if strings.TrimSpace(decision.Reason) == "" {
+			decision.Reason = "planner recommended lookup but produced no keyword queries"
+		}
+		fmt.Fprintln(stderr, "\nlark-cue: planner recommended lookup but produced no keyword queries.")
+		if err := eval.Append(cfg.Evaluation.LogPath, eval.FromPlanner(runner.CommandString(opts.command), decision, plannerLatency)); err != nil {
+			fmt.Fprintf(stderr, "lark-cue: failed to write evaluation log: %v\n", err)
+		}
 		return result.ExitCode
 	}
 
-	started := time.Now()
+	if err := eval.Append(cfg.Evaluation.LogPath, eval.FromPlanner(runner.CommandString(opts.command), decision, plannerLatency)); err != nil {
+		fmt.Fprintf(stderr, "lark-cue: failed to write evaluation log: %v\n", err)
+	}
+
+	scenario := scenarioFromDecision(decision)
 	if shouldStyleOutput(stderr) {
 		fmt.Fprintln(stderr)
 		fmt.Fprint(stderr, card.RenderStatusStyled(scenario, analysisOutput, terminalWidth(stderr)))
 	} else {
-		fmt.Fprintf(stderr, "\nlark-cue: detected %s; searching Feishu knowledge...\n", scenario.Name)
+		fmt.Fprintf(stderr, "\nlark-cue: planner selected %s; searching Feishu knowledge...\n", scenario.Name)
 	}
 
-	provider := llm.NewOpenAICompatible(cfg.LLM)
+	queries := decision.Queries
 	if opts.verbose {
-		if strings.TrimSpace(cfg.LLM.APIKey) != "" && strings.TrimSpace(cfg.LLM.Model) != "" {
-			fmt.Fprintf(stderr, "lark-cue: LLM configured model=%s base_url=%s\n", cfg.LLM.Model, cfg.LLM.BaseURL)
-		} else {
-			fmt.Fprintln(stderr, "lark-cue: LLM not configured; using deterministic query/card fallback")
-		}
-	}
-	queryReport := query.BuildWithReport(ctx, opts.command, analysisOutput, scenario, provider)
-	queries := queryReport.Queries
-	if opts.verbose {
-		fmt.Fprintf(stderr, "lark-cue: seed queries: %s\n", strings.Join(queryReport.Seeds, " | "))
-		if queryReport.LLMError != "" {
-			fmt.Fprintf(stderr, "lark-cue: LLM query expansion fallback: %s\n", queryReport.LLMError)
-		} else if len(queryReport.Expanded) > 0 {
-			fmt.Fprintf(stderr, "lark-cue: LLM expanded queries: %s\n", strings.Join(queryReport.Expanded, " | "))
-		} else {
-			fmt.Fprintln(stderr, "lark-cue: LLM query expansion returned no additional queries")
-		}
+		fmt.Fprintf(stderr, "lark-cue: LLM configured model=%s base_url=%s\n", cfg.LLM.Model, cfg.LLM.BaseURL)
+		fmt.Fprintf(stderr, "lark-cue: planner reason: %s\n", decision.Reason)
+		fmt.Fprintf(stderr, "lark-cue: planner queries: %s\n", strings.Join(queries, " | "))
 	}
 
-	var retriever retrieval.Retriever
-	if opts.demoFixture {
-		retriever = retrieval.NewFixtureRetriever()
-	} else {
-		retriever = retrieval.NewLarkRetriever(larkcli.New("lark-cli"))
-	}
-
+	retriever := newRetriever(cfg.Feishu)
 	sources, retrievalStatus, retrievalErr := retriever.Retrieve(ctx, queries)
 	if retrievalErr != nil {
 		if retrievalStatus == retrieval.StatusPartial {
@@ -213,7 +243,11 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 		}
 	}
 
-	scored := evidence.Score(sources)
+	scored := evidence.ScoreWithContext(sources, evidence.Context{
+		Scenario: decision.Scenario,
+		Queries:  queries,
+		Output:   analysisOutput,
+	})
 	selected, confidence := evidence.Select(scored)
 	var llmStatus card.LLMStatus
 	kcard := card.Build(ctx, card.Input{
@@ -225,7 +259,6 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 		Confidence:      confidence,
 		RetrievalStatus: retrievalStatus,
 		RetrievalError:  retrievalErr,
-		Fixture:         opts.demoFixture,
 		Provider:        provider,
 		LLMStatus:       &llmStatus,
 	})
@@ -259,7 +292,7 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 			if target == "" {
 				fmt.Fprintln(stderr, "lark-cue: push send requested but no --push-chat or feishu.default_push_chat is configured")
 			} else {
-				sender := push.NewSender(larkcli.New("lark-cli"))
+				sender := push.NewSender(larkcli.NewWithProfile("lark-cli", cfg.Feishu.Profile))
 				if err := sender.Send(ctx, target, renderedPush); err != nil {
 					fmt.Fprintf(stderr, "lark-cue: failed to send Feishu push: %v\n", err)
 				} else {
@@ -283,15 +316,42 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 	return result.ExitCode
 }
 
-func outputWithSignals(output string, signals string) string {
-	signals = strings.TrimSpace(signals)
-	if signals == "" || strings.Contains(output, signals) {
-		return output
+func scenarioFromDecision(decision llm.PlanDecision) detector.Scenario {
+	name := strings.TrimSpace(decision.Scenario)
+	if name == "" {
+		name = "Internal knowledge cue"
 	}
-	if strings.TrimSpace(output) == "" {
-		return signals
+	return detector.Scenario{
+		ID:      sanitizeScenarioID(name),
+		Name:    name,
+		Matched: decision.Queries,
 	}
-	return output + "\n" + signals
+}
+
+func sanitizeScenarioID(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+			lastUnderscore = false
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastUnderscore = false
+		default:
+			if !lastUnderscore && b.Len() > 0 {
+				b.WriteByte('_')
+				lastUnderscore = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
+		return "internal_knowledge_cue"
+	}
+	return out
 }
 
 func runEval(cfg config.Config, args []string, stdout, stderr io.Writer) int {
@@ -319,8 +379,8 @@ func runEval(cfg config.Config, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "lark-cue: failed to read evaluation log: %v\n", err)
 			return 1
 		}
-		records := eval.LimitCueRecords(result.Records, opts.limit)
-		summary := eval.Summarize(records, result.MalformedLines, opts.limit)
+		result = eval.LimitReadResult(result, opts.limit)
+		summary := eval.SummarizeResult(result, opts.limit)
 		if shouldStyleOutput(stdout) {
 			fmt.Fprint(stdout, eval.RenderSummaryStyled(summary, terminalWidth(stdout)))
 		} else {
@@ -410,7 +470,7 @@ Usage:
   lark-cue feedback <card-id> useful|not-useful
 
 Commands:
-  run       Run a command and show an evidence-backed cue on Feishu API failures
+  run       Run a command and show an LLM-planned evidence-backed internal knowledge cue on failures
   eval      Summarize local cue evaluation records
   feedback  Record useful/not-useful feedback for a generated cue
   help      Show this help
@@ -421,8 +481,12 @@ func printRunHelp(w io.Writer) {
 	fmt.Fprintln(w, `Usage:
   lark-cue run [flags] -- <command>
 
+Requires LLM config:
+  LARK_CUE_LLM_API_KEY and LARK_CUE_LLM_MODEL
+Optional Feishu profile:
+  LARK_CUE_FEISHU_PROFILE to pass --profile to lark-cli retrieval and push sending
+
 Flags:
-  --demo-fixture        Use labeled local fixture retrieval instead of real lark-cli
   --prepare-push        Print a Feishu group message preview
   --send-push           Send the prepared message through lark-cli
   --push-chat <target>  Feishu chat id or chat name for push sending

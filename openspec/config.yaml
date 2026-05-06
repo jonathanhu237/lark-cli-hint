@@ -3,13 +3,20 @@ schema: spec-driven
 context: |
   Project: `lark-cue`, a Go CLI MVP for the Feishu OpenClaw AI Campus
   Challenge. The product is an active terminal knowledge cue assistant for
-  enterprise developers: it detects concrete Feishu API auth/scope/token
-  failures, retrieves real Feishu knowledge through `lark-cli`, and renders
-  short cited knowledge cards.
+  enterprise developers: it requires an LLM planner for failed wrapped
+  commands, retrieves real Feishu knowledge through `lark-cli` when the
+  planner says internal knowledge is relevant, and renders short cited
+  knowledge cards.
 
   Implementation bias:
-  - Prefer one coherent Feishu API scope/token demo over broad generic shell
-    assistant behavior.
+  - Prefer one coherent FlowOps/Airflow internal-app demo over broad generic
+    shell assistant behavior.
+  - Do not add per-application deterministic detector rules for new internal
+    apps unless a future change explicitly asks for profiles or filters.
+  - `lark-cue run` must fail before executing the wrapped command when LLM
+    configuration is missing.
+  - Runtime retrieval should use planner keyword queries across Docs/Wiki and
+    IM routes; seeded demo titles belong only in docs, scripts, and tests.
   - Keep side effects explicit; Feishu push sending must require an explicit
     per-run send action.
   - Ground card claims only in fetched/read evidence snippets and source

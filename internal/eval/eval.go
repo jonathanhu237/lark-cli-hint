@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"lark-cue/internal/card"
+	"lark-cue/internal/llm"
 )
 
 type Record struct {
@@ -14,9 +15,12 @@ type Record struct {
 	CardID          string          `json:"card_id"`
 	Command         string          `json:"command"`
 	Scenario        string          `json:"scenario"`
+	Reason          string          `json:"reason,omitempty"`
+	ShouldRetrieve  *bool           `json:"should_retrieve,omitempty"`
 	RetrievalStatus string          `json:"retrieval_status"`
 	RetrievalError  string          `json:"retrieval_error,omitempty"`
 	Sources         []card.Citation `json:"sources"`
+	Confidence      string          `json:"confidence,omitempty"`
 	LatencyMS       int64           `json:"latency_ms"`
 	QueryCount      int             `json:"query_count"`
 	Feedback        string          `json:"feedback"`
@@ -36,10 +40,26 @@ func FromCard(k card.KnowledgeCard) Record {
 		RetrievalStatus: string(k.RetrievalStatus),
 		RetrievalError:  k.RetrievalError,
 		Sources:         sources,
+		Confidence:      string(k.Confidence),
 		LatencyMS:       k.LatencyMS,
 		QueryCount:      k.QueryCount,
 		Feedback:        k.Feedback,
 		CreatedAt:       k.CreatedAt,
+	}
+}
+
+func FromPlanner(command string, decision llm.PlanDecision, latencyMS int64) Record {
+	shouldRetrieve := decision.ShouldRetrieve
+	return Record{
+		Type:           "planner",
+		Command:        command,
+		Scenario:       decision.Scenario,
+		Reason:         decision.Reason,
+		ShouldRetrieve: &shouldRetrieve,
+		Sources:        []card.Citation{},
+		LatencyMS:      latencyMS,
+		QueryCount:     len(decision.Queries),
+		CreatedAt:      time.Now(),
 	}
 }
 

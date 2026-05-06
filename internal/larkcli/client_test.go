@@ -2,6 +2,8 @@ package larkcli
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -38,5 +40,22 @@ func TestRunJSONDoesNotOverwriteOKFalseWithStderrJSON(t *testing.T) {
 	_, err := client.RunJSON(context.Background(), "-c", "printf '%s' '{\"ok\":false,\"error\":{\"message\":\"token expired\"}}'; printf '%s' '{\"ok\":true}' >&2")
 	if err == nil || !strings.Contains(err.Error(), "token expired") {
 		t.Fatalf("expected stdout ok=false to be preserved, got %v", err)
+	}
+}
+
+func TestRunJSONPassesProfileBeforeCommand(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "lark-cli")
+	if err := os.WriteFile(bin, []byte(`#!/bin/sh
+if [ "$*" != "--profile demo docs +search --query FlowOps --format json" ]; then
+  printf '{"ok":false,"message":"args=%s"}' "$*" >&2
+  exit 1
+fi
+printf '{"ok":true,"data":{"results":[]}}'
+`), 0o755); err != nil {
+		t.Fatalf("write helper: %v", err)
+	}
+	client := NewWithProfile(bin, "demo")
+	if _, err := client.RunJSON(context.Background(), "docs", "+search", "--query", "FlowOps", "--format", "json"); err != nil {
+		t.Fatalf("RunJSON error: %v", err)
 	}
 }

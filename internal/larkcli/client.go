@@ -13,11 +13,18 @@ import (
 
 type Client struct {
 	binary  string
+	profile string
 	timeout time.Duration
 }
 
 func New(binary string) *Client {
 	return &Client{binary: binary, timeout: 20 * time.Second}
+}
+
+func NewWithProfile(binary string, profile string) *Client {
+	client := New(binary)
+	client.profile = strings.TrimSpace(profile)
+	return client
 }
 
 func (c *Client) RunJSON(ctx context.Context, args ...string) (map[string]any, error) {
@@ -26,6 +33,7 @@ func (c *Client) RunJSON(ctx context.Context, args ...string) (map[string]any, e
 		ctx, cancel = context.WithTimeout(ctx, c.timeout)
 		defer cancel()
 	}
+	args = c.args(args...)
 	cmd := exec.CommandContext(ctx, c.binary, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -50,6 +58,15 @@ func (c *Client) RunJSON(ctx context.Context, args ...string) (map[string]any, e
 		return nil, fmt.Errorf("parse lark-cli JSON for %s: %w", strings.Join(args, " "), parseErr)
 	}
 	return parsed, nil
+}
+
+func (c *Client) args(args ...string) []string {
+	if strings.TrimSpace(c.profile) == "" {
+		return args
+	}
+	out := []string{"--profile", strings.TrimSpace(c.profile)}
+	out = append(out, args...)
+	return out
 }
 
 func isSemanticCLIError(err error) bool {

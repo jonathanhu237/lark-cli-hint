@@ -209,3 +209,50 @@ func TestSnippetIncludesStrongErrorAndCauseActionLines(t *testing.T) {
 		t.Fatalf("snippet did not include both error and action support: %q", selected[0].Snippet)
 	}
 }
+
+func TestScoreWithContextSelectsFlowOpsEvidence(t *testing.T) {
+	sources := []retrieval.Source{
+		{
+			Type:  "doc",
+			Title: "FlowOps DAG Import Error 排障 FAQ",
+			Content: strings.Join([]string{
+				"FlowOps DAG import error 命中 billing_daily，终端包含 Variable.get(\"billing_region\")。",
+				"推荐处理：把 Variable.get 移到任务运行阶段，然后执行 flowctl dags list-import-errors 验证。",
+			}, "\n"),
+			Fetched: true,
+		},
+	}
+	selected, confidence := Select(ScoreWithContext(sources, Context{
+		Scenario: "FlowOps DAG import error",
+		Queries: []string{
+			"FlowOps DAG import error billing_daily",
+			"billing_daily billing_region Variable.get",
+		},
+		Output: "Broken DAG: billing_daily Variable billing_region does not exist",
+	}))
+	if confidence != ConfidenceHigh || len(selected) != 1 {
+		t.Fatalf("selected/confidence = %+v/%s", selected, confidence)
+	}
+	if !strings.Contains(selected[0].Snippet, "billing_daily") || !strings.Contains(selected[0].Snippet, "list-import-errors") {
+		t.Fatalf("FlowOps snippet omitted scenario/action support: %q", selected[0].Snippet)
+	}
+}
+
+func TestScoreWithContextFiltersUnrelatedEvidence(t *testing.T) {
+	sources := []retrieval.Source{
+		{
+			Type:    "doc",
+			Title:   "frontend guide",
+			Content: "前端主题色调整记录。建议在组件库里检查按钮颜色。",
+			Fetched: true,
+		},
+	}
+	selected, confidence := Select(ScoreWithContext(sources, Context{
+		Scenario: "FlowOps DAG import error",
+		Queries:  []string{"billing_daily billing_region Variable.get"},
+		Output:   "Broken DAG: billing_daily Variable billing_region does not exist",
+	}))
+	if confidence != ConfidenceNone || len(selected) != 0 {
+		t.Fatalf("unrelated evidence selected=%+v confidence=%s", selected, confidence)
+	}
+}

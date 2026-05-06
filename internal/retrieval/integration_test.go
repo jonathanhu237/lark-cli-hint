@@ -17,7 +17,7 @@ func TestRealLarkCLISmoke(t *testing.T) {
 		t.Skip("lark-cli not installed")
 	}
 	retriever := NewLarkRetriever(larkcli.New("lark-cli"))
-	sources, status, err := retriever.Retrieve(context.Background(), []string{"missing required scope"})
+	sources, status, err := retriever.Retrieve(context.Background(), []string{"FlowOps DAG import error billing_daily"})
 	if err != nil {
 		t.Fatalf("real retrieval failed: %v", err)
 	}

@@ -1,118 +1,140 @@
-# lark-cue MVP Demo
+# lark-cue FlowOps Demo
 
 This demo proves one loop:
 
 ```text
-terminal command fails
--> lark-cue detects a Feishu API scope/token/permission error
--> lark-cue searches real Feishu Docs/Wiki and IM through lark-cli
+real internal-style CLI command fails
+-> lark-cue asks the LLM whether internal knowledge should be retrieved
+-> LLM produces short Feishu keyword queries
+-> lark-cue searches Docs/Wiki/Sheets and IM through lark-cli
 -> lark-cue fetches/reads evidence
 -> lark-cue prints a short cited knowledge card
--> lark-cue records feedback/evaluation data
+-> lark-cue records planner/cue evaluation data
 ```
 
 ## Prerequisites
 
-Check local Feishu access:
+Build the CLI:
 
-```bash
-lark-cli doctor
-```
-
-Expected health is a valid Feishu profile with token verification passing. The primary MVP path uses real `lark-cli` calls. It does not silently fall back to local fixtures.
-
-Optional LLM configuration:
-
-```bash
-export LARK_CUE_LLM_BASE_URL="https://api.openai.com/v1"
-export LARK_CUE_LLM_API_KEY="..."
-export LARK_CUE_LLM_MODEL="..."
-```
-
-If LLM variables are absent, deterministic seed queries and template card generation are used.
-
-The Feishu-side mock Docs and IM messages needed for the demo are listed in
-`docs/feishu-mock-data.md`.
-
-## Run The Demo
-
-Build the CLI first if you want to avoid `go run` printing `exit status 1` when the wrapped failing command correctly returns code `1`:
-
-```bash
+```sh
 go build -o ./bin/lark-cue ./cmd/lark-cue
 ```
 
-```bash
-./bin/lark-cue run -- node examples/failing-feishu-api.js
+Configure LLM access. `lark-cue run` refuses to execute wrapped commands without it.
+
+```sh
+export LARK_CUE_LLM_API_KEY="..."
+export LARK_CUE_LLM_MODEL="..."
+export LARK_CUE_LLM_BASE_URL="https://api.openai.com/v1"
 ```
 
-The wrapped command emits:
+Check Feishu access:
 
-```text
-LarkApiError: missing required scope: docx:document:read
-tenant_access_token invalid or permission denied
+```sh
+lark-cli doctor
 ```
 
-`lark-cue` should search Docs/Wiki and IM messages using generated queries, fetch/read candidate sources, filter evidence, and print a compact terminal card.
+Use a test Feishu profile for the demo.
 
-## Recorded Demo Validation
-
-For a clean recorded demo, isolate evaluation records in a temporary log:
-
-```bash
-export LARK_CUE_EVAL_LOG="$(mktemp -t lark-cue-evaluations.XXXXXX)"
+```sh
+export LARK_CUE_FEISHU_PROFILE="<test-profile>"
 ```
 
-Run the cue flow, then record feedback for the generated card id:
+## Seed FlowOps Knowledge
 
-```bash
-./bin/lark-cue run --demo-fixture --no-feedback-prompt -- node examples/failing-feishu-api.js
-./bin/lark-cue feedback <card-id> useful
+Dry-run first:
+
+```sh
+scripts/seed-flowops-feishu-demo --profile "$LARK_CUE_FEISHU_PROFILE"
 ```
 
-Then show the validation view:
+Apply when the planned writes look correct:
 
-```bash
-./bin/lark-cue eval report
+```sh
+scripts/seed-flowops-feishu-demo --apply --profile "$LARK_CUE_FEISHU_PROFILE"
 ```
 
-The report summarizes recent cue records from the local evaluation log: run count, retrieval status, fixture-vs-real usage, citation coverage, query count, latency, and feedback. It is read-only; it does not rerun commands, call `lark-cli`, invoke an LLM, or send Feishu messages.
+The script creates or updates three Markdown documents:
 
-## Demo Fixture Recovery
+- `[lark-cue-demo] FlowOps DAG Import Error 排障 FAQ`
+- `[lark-cue-demo] billing_daily 历史故障复盘`
+- `[lark-cue-demo] FlowOps DAG 开发规范`
 
-Fixture mode is explicit and labeled:
+It does not send IM messages, delete resources, or write without `--apply`.
 
-```bash
-./bin/lark-cue run --demo-fixture --no-feedback-prompt -- node examples/failing-feishu-api.js
+After apply, run the smoke searches printed by the script. Feishu indexing can lag, so wait and retry if the documents do not appear immediately.
+
+## Start the Local FlowOps Demo
+
+The demo uses real Airflow through Docker Compose.
+
+```sh
+cd examples/flowops-airflow
+cp .env.example .env
+./flowctl init
 ```
 
-Use fixture mode only for offline tests or demo recovery. It is not the primary MVP path.
+Confirm the broken path:
 
-## Push Preview
-
-Preview a group push without sending:
-
-```bash
-./bin/lark-cue run --prepare-push -- node examples/failing-feishu-api.js
+```sh
+./flowctl check billing_daily
 ```
 
-Send requires an explicit flag and target:
+Expected output includes a DAG import error for `billing_daily`, `Variable.get("billing_region")`, or a missing `billing_region` variable. The exact traceback can vary by Airflow version.
 
-```bash
-./bin/lark-cue run --send-push --push-chat "oc_xxx" -- node examples/failing-feishu-api.js
+## Run lark-cue
+
+For a clean recorded demo, isolate evaluation records:
+
+```sh
+export LARK_CUE_EVAL_LOG="$(mktemp -t lark-cue-flowops-evaluations.XXXXXX)"
 ```
 
-## Feedback
+Run:
 
-Interactive terminals can mark a card useful, not useful, or skipped. Feedback can also be recorded later:
-
-```bash
-./bin/lark-cue feedback <card-id> useful
-./bin/lark-cue feedback <card-id> not-useful
+```sh
+../../bin/lark-cue run --no-feedback-prompt -- ./flowctl check billing_daily
 ```
 
-Evaluation records default to:
+Expected behavior:
 
-```text
-~/.lark-cue/evaluations.jsonl
+- the original FlowOps/Airflow error remains visible;
+- `lark-cue` shows the planner-selected FlowOps scenario;
+- the LLM-generated keyword queries search real Feishu Docs/Wiki/Sheets and IM;
+- the knowledge card cites FlowOps seed documents when retrieval succeeds;
+- if evidence is weak, the card says so instead of inventing a cause.
+
+Record feedback after the card id is printed:
+
+```sh
+../../bin/lark-cue feedback <card-id> useful
+```
+
+Then show validation:
+
+```sh
+../../bin/lark-cue eval report
+```
+
+The report summarizes planner decisions, retrieve-vs-skip counts, cue runs, retrieval status, citation coverage, query count, latency, and feedback.
+
+## Optional Push Preview
+
+Preview a Feishu group card without sending:
+
+```sh
+../../bin/lark-cue run --prepare-push --no-feedback-prompt -- ./flowctl check billing_daily
+```
+
+Actual sending requires an explicit send flag and target:
+
+```sh
+../../bin/lark-cue run --send-push --push-chat "oc_xxx" --no-feedback-prompt -- ./flowctl check billing_daily
+```
+
+## Cleanup
+
+```sh
+./flowctl down
+./flowctl clean
 ```

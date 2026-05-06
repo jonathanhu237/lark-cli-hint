@@ -7,19 +7,6 @@ import (
 	"testing"
 )
 
-func TestFixtureRetrieverIsExplicitlyLabeled(t *testing.T) {
-	sources, status, err := NewFixtureRetriever().Retrieve(context.Background(), []string{"missing required scope"})
-	if err != nil {
-		t.Fatalf("fixture retrieve error: %v", err)
-	}
-	if status != StatusFixture {
-		t.Fatalf("status = %s, want fixture", status)
-	}
-	if len(sources) == 0 || !sources[0].Fixture {
-		t.Fatalf("sources not fixture-labeled: %+v", sources)
-	}
-}
-
 func TestPartialRetrievalFailureIsReported(t *testing.T) {
 	retriever := NewLarkRetriever(fakeJSONRunner{
 		failPrefixes: [][]string{{"docs", "+search"}},
@@ -33,6 +20,27 @@ func TestPartialRetrievalFailureIsReported(t *testing.T) {
 	}
 	if len(sources) != 1 || sources[0].Type != "im" {
 		t.Fatalf("sources = %+v, want one IM source", sources)
+	}
+}
+
+func TestRetrieveSearchesDocsAndIMForEachQuery(t *testing.T) {
+	runner := &recordingJSONRunner{}
+	retriever := NewLarkRetriever(runner)
+	_, status, err := retriever.Retrieve(context.Background(), []string{"alpha", "beta"})
+	if err != nil {
+		t.Fatalf("Retrieve error: %v", err)
+	}
+	if status != StatusOK {
+		t.Fatalf("status = %s, want ok", status)
+	}
+	want := []string{
+		"docs:alpha",
+		"im:alpha",
+		"docs:beta",
+		"im:beta",
+	}
+	if !slices.Equal(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
 	}
 }
 
@@ -71,6 +79,22 @@ func (f fakeJSONRunner) RunJSON(ctx context.Context, args ...string) (map[string
 				},
 			},
 		}, nil
+	}
+	return map[string]any{"ok": true, "data": map[string]any{}}, nil
+}
+
+type recordingJSONRunner struct {
+	calls []string
+}
+
+func (r *recordingJSONRunner) RunJSON(ctx context.Context, args ...string) (map[string]any, error) {
+	if len(args) >= 4 && args[0] == "docs" && args[1] == "+search" {
+		r.calls = append(r.calls, "docs:"+args[3])
+		return map[string]any{"ok": true, "data": map[string]any{"results": []any{}}}, nil
+	}
+	if len(args) >= 4 && args[0] == "im" && args[1] == "+messages-search" {
+		r.calls = append(r.calls, "im:"+args[3])
+		return map[string]any{"ok": true, "data": map[string]any{"messages": []any{}}}, nil
 	}
 	return map[string]any{"ok": true, "data": map[string]any{}}, nil
 }

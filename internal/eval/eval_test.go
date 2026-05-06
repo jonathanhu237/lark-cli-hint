@@ -73,7 +73,7 @@ func TestCueRecordIncludesRequiredReportFields(t *testing.T) {
 func TestReadCueRecordsAggregatesFeedbackAndMalformedLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "evaluations.jsonl")
 	lines := []string{
-		`{"type":"cue","card_id":"cue_1","retrieval_status":"fixture","sources":[{"type":"doc","title":"Guide"}],"latency_ms":1000,"query_count":4,"feedback":"skipped","created_at":"2026-05-06T00:00:00Z"}`,
+		`{"type":"cue","card_id":"cue_1","retrieval_status":"partial","sources":[{"type":"doc","title":"Guide"}],"latency_ms":1000,"query_count":4,"feedback":"skipped","created_at":"2026-05-06T00:00:00Z"}`,
 		`not-json`,
 		`{"type":"feedback_update","card_id":"cue_1","feedback":"useful","created_at":"2026-05-06T00:00:01Z"}`,
 		`{"type":"cue","card_id":"cue_2","retrieval_status":"ok","sources":[],"latency_ms":3000,"query_count":2,"feedback":"skipped","created_at":"2026-05-06T00:00:02Z"}`,
@@ -100,11 +100,11 @@ func TestReadCueRecordsAggregatesFeedbackAndMalformedLines(t *testing.T) {
 	if summary.TotalRuns != 2 {
 		t.Fatalf("TotalRuns = %d, want 2", summary.TotalRuns)
 	}
-	if summary.StatusCounts["fixture"] != 1 || summary.StatusCounts["ok"] != 1 {
-		t.Fatalf("StatusCounts = %#v, want fixture=1 ok=1", summary.StatusCounts)
+	if summary.StatusCounts["partial"] != 1 || summary.StatusCounts["ok"] != 1 {
+		t.Fatalf("StatusCounts = %#v, want partial=1 ok=1", summary.StatusCounts)
 	}
-	if summary.FixtureRuns != 1 || summary.RealRuns != 1 {
-		t.Fatalf("fixture/real = %d/%d, want 1/1", summary.FixtureRuns, summary.RealRuns)
+	if summary.RealRuns != 2 {
+		t.Fatalf("RealRuns = %d, want 2", summary.RealRuns)
 	}
 	if summary.RunsWithSources != 1 || summary.TotalSources != 1 {
 		t.Fatalf("source coverage = %d/%d, want 1/1", summary.RunsWithSources, summary.TotalSources)
@@ -164,9 +164,38 @@ func TestReadCueRecordsMissingAndLimit(t *testing.T) {
 	}
 }
 
+func TestReadCueRecordsIncludesPlannerEvents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "evaluations.jsonl")
+	lines := []string{
+		`{"type":"planner","command":"flowctl check billing_daily","scenario":"FlowOps DAG import error","reason":"internal platform failure","should_retrieve":true,"query_count":3,"latency_ms":800,"created_at":"2026-05-06T00:00:00Z"}`,
+		`{"type":"planner","command":"python missing.py","scenario":"local file error","reason":"missing local file","should_retrieve":false,"query_count":0,"latency_ms":200,"created_at":"2026-05-06T00:00:01Z"}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
+
+	result, err := ReadCueRecords(path)
+	if err != nil {
+		t.Fatalf("ReadCueRecords error: %v", err)
+	}
+	if len(result.PlannerRecords) != 2 || len(result.Events) != 2 {
+		t.Fatalf("planner/events = %d/%d, want 2/2", len(result.PlannerRecords), len(result.Events))
+	}
+	summary := SummarizeResult(result, DefaultReportLimit)
+	if summary.PlannerRuns != 2 || summary.PlannerRetrieve != 1 || summary.PlannerSkip != 1 {
+		t.Fatalf("planner summary = %+v, want runs=2 retrieve=1 skip=1", summary)
+	}
+	report := RenderSummary(summary)
+	for _, want := range []string{"Planner", "decisions: 2", "retrieve: 1", "skip: 1"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+}
+
 func TestRenderSummaryEmptyAndPlain(t *testing.T) {
 	empty := RenderSummary(Summarize(nil, 1, DefaultReportLimit))
-	if !strings.Contains(empty, "No cue records found") || !strings.Contains(empty, "malformed") {
+	if !strings.Contains(empty, "No cue or planner records found") || !strings.Contains(empty, "malformed") {
 		t.Fatalf("empty report missing expected content:\n%s", empty)
 	}
 
@@ -202,7 +231,6 @@ func TestRenderSummaryStyledKeepsReportContent(t *testing.T) {
 	rendered := RenderSummaryStyled(Summary{
 		TotalRuns:         2,
 		StatusCounts:      map[string]int{"ok": 1, "partial": 1, "stale": 1},
-		FixtureRuns:       0,
 		RunsWithSources:   2,
 		TotalSources:      4,
 		AverageSources:    2,

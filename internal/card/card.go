@@ -28,8 +28,7 @@ type Input struct {
 	Confidence      evidence.Confidence
 	RetrievalStatus retrieval.Status
 	RetrievalError  error
-	Fixture         bool
-	Provider        llm.Provider
+	Provider        llm.CardProvider
 	LLMStatus       *LLMStatus
 }
 
@@ -51,7 +50,6 @@ type KnowledgeCard struct {
 	RetrievalStatus retrieval.Status
 	RetrievalError  string
 	QueryCount      int
-	Fixture         bool
 	Feedback        string
 	LatencyMS       int64
 	CreatedAt       time.Time
@@ -66,18 +64,16 @@ type Citation struct {
 	Sender    string `json:"sender,omitempty"`
 	Timestamp string `json:"timestamp,omitempty"`
 	Summary   string `json:"summary,omitempty"`
-	Fixture   bool   `json:"fixture,omitempty"`
 }
 
 func Build(ctx context.Context, input Input) KnowledgeCard {
 	card := KnowledgeCard{
 		ID:              newID(),
 		Command:         runner.CommandString(input.Command),
-		Scenario:        "检测到飞书 API 权限 / scope / token 错误。",
+		Scenario:        scenarioLabel(input.Scenario),
 		Confidence:      input.Confidence,
 		RetrievalStatus: input.RetrievalStatus,
 		QueryCount:      len(input.Queries),
-		Fixture:         input.Fixture,
 		CreatedAt:       time.Now(),
 	}
 	if input.RetrievalError != nil {
@@ -109,7 +105,7 @@ func Build(ctx context.Context, input Input) KnowledgeCard {
 				if input.LLMStatus != nil {
 					input.LLMStatus.Accepted = true
 				}
-				enforceConfidence(&card, input.Confidence, input.RetrievalStatus, input.RetrievalError, input.Fixture, input.Evidence)
+				enforceConfidence(&card, input.Confidence, input.RetrievalStatus, input.RetrievalError, input.Evidence)
 				if card.NextAction == "" {
 					card.NextAction = fallbackNextAction(input.Confidence, input.Evidence)
 				}
@@ -124,7 +120,7 @@ func Build(ctx context.Context, input Input) KnowledgeCard {
 	}
 
 	card.LikelyCause = fallbackCause(input.Confidence, input.RetrievalStatus, input.RetrievalError, input.Evidence)
-	card.Caveat = fallbackCaveat(input.Confidence, input.RetrievalStatus, input.RetrievalError, input.Fixture)
+	card.Caveat = fallbackCaveat(input.Confidence, input.RetrievalStatus, input.RetrievalError)
 	card.NextAction = fallbackNextAction(input.Confidence, input.Evidence)
 	return card
 }
@@ -132,15 +128,12 @@ func Build(ctx context.Context, input Input) KnowledgeCard {
 func Render(k KnowledgeCard) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "lark-cue knowledge card [%s]\n", k.ID)
-	if k.Fixture {
-		b.WriteString("Mode\nDemo fixture / simulated Feishu content. Not real runtime retrieval.\n\n")
-	}
 	b.WriteString("Scenario\n")
 	b.WriteString(k.Scenario + "\n\n")
 	b.WriteString("Likely Cause\n")
 	b.WriteString(valueOr(k.LikelyCause, "未找到足够证据判断具体原因。") + "\n\n")
 	b.WriteString("Next Action\n")
-	b.WriteString(valueOr(k.NextAction, "检查飞书开放平台应用权限、token 状态和本地授权状态后重试。") + "\n\n")
+	b.WriteString(valueOr(k.NextAction, "打开内部来源核对后再执行修复动作。") + "\n\n")
 	b.WriteString("Sources\n")
 	if len(k.Citations) == 0 {
 		b.WriteString("- 未找到可支撑结论的内部来源。\n")
@@ -193,8 +186,6 @@ func RenderStyled(k KnowledgeCard, width int) string {
 	metaStyle := lipgloss.NewStyle().Foreground(muted)
 	highPill := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#071B10")).Background(ok).Padding(0, 1)
 	lowPill := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#271B04")).Background(warn).Padding(0, 1)
-	fixturePill := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#241300")).Background(lipgloss.Color("#FFC857")).Padding(0, 1)
-
 	confidencePill := lowPill.Render("LOW")
 	if k.Confidence == evidence.ConfidenceHigh {
 		confidencePill = highPill.Render("HIGH")
@@ -205,15 +196,11 @@ func RenderStyled(k KnowledgeCard, width int) string {
 		metaStyle.Render(k.ID),
 		confidencePill,
 	}
-	if k.Fixture {
-		headerParts = append(headerParts, fixturePill.Render("FIXTURE"))
-	}
-
 	var sections []string
 	sections = append(sections, strings.Join(headerParts, "  "))
 	sections = append(sections, renderStyledKV(label, body, "Scenario", k.Scenario, contentWidth))
 	sections = append(sections, renderStyledKV(label, body, "Likely cause", valueOr(k.LikelyCause, "未找到足够证据判断具体原因。"), contentWidth))
-	sections = append(sections, renderStyledKV(label, body, "Next action", valueOr(k.NextAction, "检查飞书开放平台应用权限、token 状态和本地授权状态后重试。"), contentWidth))
+	sections = append(sections, renderStyledKV(label, body, "Next action", valueOr(k.NextAction, "打开内部来源核对后再执行修复动作。"), contentWidth))
 
 	evidenceBlock := []string{label.Render("Evidence")}
 	if len(k.Citations) == 0 {
@@ -292,8 +279,17 @@ func citationFrom(item evidence.ScoredSource) Citation {
 		Sender:    source.Sender,
 		Timestamp: source.Timestamp,
 		Summary:   item.Snippet,
-		Fixture:   source.Fixture,
 	}
+}
+
+func scenarioLabel(scenario detector.Scenario) string {
+	if strings.TrimSpace(scenario.Name) != "" {
+		return strings.TrimSpace(scenario.Name)
+	}
+	if strings.TrimSpace(scenario.ID) != "" {
+		return strings.TrimSpace(scenario.ID)
+	}
+	return "Internal knowledge cue"
 }
 
 func renderStyledKV(labelStyle, bodyStyle lipgloss.Style, key, value string, width int) string {
@@ -321,9 +317,6 @@ func renderStyledCitation(index int, c Citation, width int, accent, muted lipglo
 		Foreground(lipgloss.Color("#DDE4FF")).
 		Width(width - 4).
 		Render(wrapText(source, width-4))
-	if c.Fixture {
-		sourceLine += "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("#FFC857")).Render("fixture")
-	}
 	summary := valueOr(c.Summary, "无摘要")
 	detail := lipgloss.NewStyle().Foreground(muted).Width(width - 4).Render(wrapText(summary, width-4))
 	return number + " " + strings.ReplaceAll(sourceLine, "\n", "\n   ") + "\n" + indent(detail, "   ")
@@ -421,12 +414,12 @@ func renderCitation(c Citation) string {
 	}
 }
 
-func enforceConfidence(card *KnowledgeCard, conf evidence.Confidence, status retrieval.Status, retrievalErr error, fixture bool, evidenceItems []evidence.ScoredSource) {
+func enforceConfidence(card *KnowledgeCard, conf evidence.Confidence, status retrieval.Status, retrievalErr error, evidenceItems []evidence.ScoredSource) {
 	if conf != evidence.ConfidenceHigh {
 		card.LikelyCause = fallbackCause(conf, status, retrievalErr, evidenceItems)
 		card.NextAction = fallbackNextAction(conf, evidenceItems)
 	}
-	if caveat := fallbackCaveat(conf, status, retrievalErr, fixture); caveat != "" {
+	if caveat := fallbackCaveat(conf, status, retrievalErr); caveat != "" {
 		card.Caveat = caveat
 	}
 }
@@ -514,6 +507,13 @@ func groundedClaimTokens(fieldLower string) []string {
 		"missing required scope",
 		"tenant_access_token invalid",
 		"permission denied",
+		"dag import error",
+		"dagbag import error",
+		"variable.get",
+		"billing_region",
+		"billing_daily",
+		"list-import-errors",
+		"parse time",
 		"权限变更",
 		"发布权限",
 		"重新授权",
@@ -782,6 +782,9 @@ func fallbackCause(conf evidence.Confidence, status retrieval.Status, retrievalE
 		return "真实 Feishu 检索不可用，暂不判断具体原因。"
 	}
 	if conf == evidence.ConfidenceHigh {
+		if !looksLikeFeishuEvidence(evidenceItems) {
+			return "内部证据支持该失败场景；关键线索：" + firstEvidenceSnippet(evidenceItems) + "。"
+		}
 		signals := signalsFromEvidence(evidenceItems)
 		parts := []string{"证据显示当前错误与飞书 API 权限、scope 或 token 状态有关"}
 		if signals.docxScope {
@@ -802,11 +805,14 @@ func fallbackCause(conf evidence.Confidence, status retrieval.Status, retrievalE
 		}
 		return strings.Join(parts, "，") + "。"
 	}
-	return "检索到的内部证据不足以支撑确定结论，疑似与飞书 API 权限、scope 或 token 状态有关。"
+	return "检索到的内部证据不足以支撑确定结论。"
 }
 
 func fallbackNextAction(conf evidence.Confidence, evidenceItems []evidence.ScoredSource) string {
 	if conf == evidence.ConfidenceHigh {
+		if !looksLikeFeishuEvidence(evidenceItems) {
+			return "按引用来源中的修复步骤处理，并在修复后重新执行失败命令验证。"
+		}
 		signals := signalsFromEvidence(evidenceItems)
 		action := "检查飞书开放平台应用权限和授权状态"
 		if signals.docxScope {
@@ -836,13 +842,13 @@ func fallbackNextAction(conf evidence.Confidence, evidenceItems []evidence.Score
 		}
 		return action + "。"
 	}
-	return "先检查应用权限、token 状态和本地授权状态；如果继续排查，请扩大搜索 `missing required scope`、`权限变更`、`重新授权`。"
+	if len(evidenceItems) > 0 {
+		return "打开引用来源核对具体修复步骤；证据不足时先不要执行高风险变更。"
+	}
+	return "未找到足够内部证据；建议补充知识库或扩大关键词后人工搜索。"
 }
 
-func fallbackCaveat(conf evidence.Confidence, status retrieval.Status, retrievalErr error, fixture bool) string {
-	if fixture {
-		return "当前使用显式 demo fixture，不能当作真实 Feishu 检索结果。"
-	}
+func fallbackCaveat(conf evidence.Confidence, status retrieval.Status, retrievalErr error) string {
 	if retrievalErr != nil {
 		if status == retrieval.StatusPartial {
 			return "部分 Feishu 检索失败，当前结论只基于已成功读取的来源。"
@@ -850,9 +856,39 @@ func fallbackCaveat(conf evidence.Confidence, status retrieval.Status, retrieval
 		return "没有真实检索证据时，lark-cue 不会给出高置信度结论。"
 	}
 	if conf != evidence.ConfidenceHigh {
+		if status == retrieval.StatusOK && conf == evidence.ConfidenceNone {
+			return "已检索内部知识库，但没有找到足够强的证据支撑具体原因。"
+		}
 		return "证据较弱，建议打开来源核对后再执行修复动作。"
 	}
 	return ""
+}
+
+func looksLikeFeishuEvidence(evidenceItems []evidence.ScoredSource) bool {
+	text := evidenceSnippetCorpus(evidenceItems)
+	for _, keyword := range []string{
+		"docx:document:read",
+		"tenant_access_token",
+		"app_access_token",
+		"user_access_token",
+		"missing required scope",
+		"飞书",
+		"开放平台",
+	} {
+		if strings.Contains(text, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstEvidenceSnippet(evidenceItems []evidence.ScoredSource) string {
+	for _, item := range evidenceItems {
+		if strings.TrimSpace(item.Snippet) != "" {
+			return strings.TrimSpace(item.Snippet)
+		}
+	}
+	return "请查看引用来源"
 }
 
 func newID() string {

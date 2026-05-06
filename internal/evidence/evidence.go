@@ -1,6 +1,7 @@
 package evidence
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -25,6 +26,12 @@ type ScoredSource struct {
 	Snippet        string
 }
 
+type Context struct {
+	Scenario string
+	Queries  []string
+	Output   string
+}
+
 var strongScopeKeywords = []string{"docx:document:read"}
 var strongErrorKeywords = []string{"missing required scope", "tenant_access_token invalid", "permission denied"}
 var concreteCauseKeywords = []string{
@@ -43,17 +50,40 @@ var concreteCauseKeywords = []string{
 }
 
 func Score(sources []retrieval.Source) []ScoredSource {
+	return score(sources, Context{}, false)
+}
+
+func ScoreWithContext(sources []retrieval.Source, ctx Context) []ScoredSource {
+	return score(sources, ctx, true)
+}
+
+func score(sources []retrieval.Source, ctx Context, useContext bool) []ScoredSource {
 	var scored []ScoredSource
+	contextKeywords := contextSignalKeywords(ctx)
+	actionKeywords := append([]string{}, concreteCauseKeywords...)
+	actionKeywords = append(actionKeywords, genericActionKeywords...)
 	for _, source := range sources {
 		if !source.Fetched || strings.TrimSpace(source.Content) == "" {
 			continue
 		}
 		snippet := snippet(source.Content)
+		if useContext {
+			snippet = snippetForContext(source.Content, ctx, actionKeywords)
+		}
 		text := strings.ToLower(snippet)
 		score := 0
-		strongScore := keywordScore(text, 4, strongScopeKeywords) +
+		baseStrongScore := keywordScore(text, 4, strongScopeKeywords) +
 			keywordScore(text, 3, strongErrorKeywords)
-		concreteCauseScore := positiveKeywordScore(text, 2, concreteCauseKeywords)
+		strongScore := baseStrongScore
+		contextScore := 0
+		if useContext {
+			contextScore = keywordScore(text, 2, contextKeywords)
+			strongScore += contextScore
+			if contextScore == 0 && baseStrongScore == 0 {
+				continue
+			}
+		}
+		concreteCauseScore := positiveKeywordScore(text, 2, actionKeywords)
 		genericCauseScore := keywordScore(text, 1, []string{"scope", "权限", "授权"})
 		scenarioScore := keywordScore(text, 1, []string{
 			"docx:document:read",
@@ -67,11 +97,18 @@ func Score(sources []retrieval.Source) []ScoredSource {
 			"open platform",
 			"开放平台",
 		})
+		if useContext && contextScore > 0 {
+			scenarioScore += contextScore
+		}
 		score += strongScore
 		score += concreteCauseScore
-		score += genericCauseScore
-		score += scenarioScore
-		score += keywordScore(text, 1, []string{"atlas", "文档摘要"})
+		if !useContext {
+			score += genericCauseScore
+			score += scenarioScore
+			score += keywordScore(text, 1, []string{"atlas", "文档摘要"})
+		} else {
+			score += scenarioScore
+		}
 		scored = append(scored, ScoredSource{
 			Source:         source,
 			Score:          score,
@@ -85,6 +122,131 @@ func Score(sources []retrieval.Source) []ScoredSource {
 		return scored[i].Score > scored[j].Score
 	})
 	return scored
+}
+
+var genericActionKeywords = []string{
+	"处理方式",
+	"修复方式",
+	"推荐处理",
+	"建议",
+	"下一步",
+	"排查",
+	"验证",
+	"检查",
+	"改用",
+	"移到",
+	"运行阶段",
+	"执行阶段",
+	"task 执行",
+	"list-import-errors",
+	"checklist",
+	"retry",
+	"rerun",
+	"verify",
+	"validate",
+	"fix",
+	"move",
+	"use",
+}
+
+var contextTokenRE = regexp.MustCompile(`[\p{L}\p{N}_:./-]+`)
+
+func contextSignalKeywords(ctx Context) []string {
+	var candidates []string
+	candidates = append(candidates, ctx.Scenario)
+	candidates = append(candidates, ctx.Queries...)
+	candidates = append(candidates, contextTokens(ctx.Scenario)...)
+	for _, query := range ctx.Queries {
+		candidates = append(candidates, contextTokens(query)...)
+	}
+	candidates = append(candidates, contextTokens(ctx.Output)...)
+	return uniqueKeywords(candidates, 32)
+}
+
+func contextTokens(value string) []string {
+	var tokens []string
+	for _, token := range contextTokenRE.FindAllString(value, -1) {
+		token = strings.Trim(token, "`'\".,;()[]{}")
+		if weakContextToken(token) {
+			continue
+		}
+		tokens = append(tokens, token)
+	}
+	return tokens
+}
+
+func weakContextToken(token string) bool {
+	lower := strings.ToLower(strings.TrimSpace(token))
+	if lower == "" {
+		return true
+	}
+	stop := map[string]bool{
+		"the": true, "and": true, "or": true, "for": true, "with": true, "from": true,
+		"this": true, "that": true, "error": true, "failed": true, "failure": true,
+		"issue": true, "problem": true, "help": true, "fix": true,
+		"的": true, "了": true, "和": true, "或": true, "与": true,
+	}
+	if stop[lower] {
+		return true
+	}
+	if utf8.RuneCountInString(lower) < 4 && !strings.ContainsAny(lower, ":_/-") {
+		return true
+	}
+	return false
+}
+
+func uniqueKeywords(values []string, limit int) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, value := range values {
+		value = strings.TrimSpace(strings.ToLower(value))
+		if value == "" || weakContextToken(value) {
+			continue
+		}
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func snippetForContext(content string, ctx Context, actionKeywords []string) string {
+	keywords := contextSignalKeywords(ctx)
+	lines := strings.Split(content, "\n")
+	var contextLine string
+	var actionLine string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		lower := strings.ToLower(line)
+		if contextLine == "" && containsAnyKeyword(lower, keywords) {
+			contextLine = line
+		}
+		if actionLine == "" && containsAnyPositiveKeyword(lower, actionKeywords) {
+			actionLine = line
+		}
+		if contextLine != "" && actionLine != "" {
+			break
+		}
+	}
+	switch {
+	case contextLine != "" && actionLine != "" && contextLine == actionLine:
+		return truncate(contextLine, 260)
+	case contextLine != "" && actionLine != "":
+		return truncate(contextLine+" / "+actionLine, 260)
+	case contextLine != "":
+		return truncate(contextLine, 220)
+	case actionLine != "":
+		return truncate(actionLine, 220)
+	}
+	return truncate(strings.TrimSpace(content), 220)
 }
 
 func Select(scored []ScoredSource) ([]ScoredSource, Confidence) {

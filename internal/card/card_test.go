@@ -33,19 +33,6 @@ func TestTemplateFallbackCard(t *testing.T) {
 	}
 }
 
-func TestFixtureCardIsLabeled(t *testing.T) {
-	card := Build(context.Background(), Input{
-		Command:         []string{"node"},
-		Scenario:        detector.Scenario{ID: detector.FeishuAPIScopeError},
-		Confidence:      evidence.ConfidenceNone,
-		RetrievalStatus: retrieval.StatusFixture,
-		Fixture:         true,
-	})
-	if !strings.Contains(Render(card), "Demo fixture") {
-		t.Fatal("fixture card was not labeled")
-	}
-}
-
 func TestLowConfidenceLLMDraftIsForcedToCaveat(t *testing.T) {
 	scenario, _ := detector.Detect("permission denied")
 	card := Build(context.Background(), Input{
@@ -394,6 +381,52 @@ func TestHighConfidenceChineseOnlyGroundedLLMDraftIsAccepted(t *testing.T) {
 	}
 }
 
+func TestNoEvidenceFlowOpsCardIsTransparentLowConfidence(t *testing.T) {
+	card := Build(context.Background(), Input{
+		Command:         []string{"flowctl", "check", "billing_daily"},
+		Output:          "Broken DAG: billing_daily Variable billing_region does not exist",
+		Scenario:        detector.Scenario{Name: "FlowOps DAG import error"},
+		Queries:         []string{"billing_daily billing_region Variable.get"},
+		Confidence:      evidence.ConfidenceNone,
+		RetrievalStatus: retrieval.StatusOK,
+	})
+	if card.Confidence != evidence.ConfidenceNone {
+		t.Fatalf("confidence = %s, want none", card.Confidence)
+	}
+	if !strings.Contains(card.LikelyCause, "证据不足") {
+		t.Fatalf("no-evidence card invented cause: %+v", card)
+	}
+	if !strings.Contains(card.NextAction, "未找到足够内部证据") {
+		t.Fatalf("no-evidence card missing transparent next action: %+v", card)
+	}
+	rendered := Render(card)
+	if !strings.Contains(rendered, "未找到可支撑结论的内部来源") || !strings.Contains(rendered, "Low") {
+		t.Fatalf("rendered no-evidence card not transparent:\n%s", rendered)
+	}
+}
+
+func TestFlowOpsGroundedLLMDraftIsAccepted(t *testing.T) {
+	card := Build(context.Background(), Input{
+		Command:  []string{"flowctl", "check", "billing_daily"},
+		Output:   "Broken DAG: billing_daily Variable billing_region does not exist",
+		Scenario: detector.Scenario{Name: "FlowOps DAG import error"},
+		Evidence: []evidence.ScoredSource{{
+			Source:         retrieval.Source{Type: "doc", Title: "FlowOps FAQ", Content: "FlowOps DAG import error billing_daily billing_region Variable.get。推荐处理：把 Variable.get 移到任务运行阶段，然后执行 flowctl dags list-import-errors 验证。", Fetched: true},
+			Score:          10,
+			StrongError:    true,
+			CauseAction:    true,
+			ScenarioSignal: true,
+			Snippet:        "FlowOps DAG import error billing_daily billing_region Variable.get。推荐处理：把 Variable.get 移到任务运行阶段，然后执行 flowctl dags list-import-errors 验证。",
+		}},
+		Confidence:      evidence.ConfidenceHigh,
+		RetrievalStatus: retrieval.StatusOK,
+		Provider:        flowOpsGroundedProvider{},
+	})
+	if !strings.Contains(card.LikelyCause, "billing_region") || !strings.Contains(card.NextAction, "list-import-errors") {
+		t.Fatalf("grounded FlowOps LLM draft was not accepted: %+v", card)
+	}
+}
+
 type chineseOverclaimingProvider struct{}
 
 func (chineseOverclaimingProvider) ExpandQueries(ctx context.Context, command []string, output string, scenario detector.Scenario, seeds []string) ([]string, error) {
@@ -537,6 +570,19 @@ func (chineseOnlyGroundedProvider) GenerateCard(ctx context.Context, input llm.C
 	}, nil
 }
 
+type flowOpsGroundedProvider struct{}
+
+func (flowOpsGroundedProvider) ExpandQueries(ctx context.Context, command []string, output string, scenario detector.Scenario, seeds []string) ([]string, error) {
+	return nil, nil
+}
+
+func (flowOpsGroundedProvider) GenerateCard(ctx context.Context, input llm.CardInput) (llm.CardDraft, error) {
+	return llm.CardDraft{
+		LikelyCause: "FlowOps DAG import error billing_daily billing_region Variable.get。",
+		NextAction:  "Variable.get 移到任务运行阶段 flowctl dags list-import-errors 验证。",
+	}, nil
+}
+
 func TestDocumentCitationIncludesIDWhenURLMissing(t *testing.T) {
 	rendered := Render(KnowledgeCard{
 		ID:         "cue_test",
@@ -556,20 +602,20 @@ func TestDocumentCitationIncludesIDWhenURLMissing(t *testing.T) {
 func TestStyledRenderKeepsCardContent(t *testing.T) {
 	rendered := RenderStyled(KnowledgeCard{
 		ID:          "cue_test",
-		Command:     "node examples/failing-feishu-api.js",
-		Scenario:    "检测到飞书 API 权限 / scope / token 错误。",
-		LikelyCause: "证据显示当前错误与飞书文档读取 scope 配置有关。",
-		NextAction:  "检查飞书开放平台应用权限，确认 `docx:document:read` 已添加并发布权限变更。",
+		Command:     "flowctl check billing_daily",
+		Scenario:    "FlowOps DAG import error",
+		LikelyCause: "内部证据支持 billing_daily 的 DAG import error 与 billing_region Variable.get 有关。",
+		NextAction:  "把 Variable.get 移到任务运行阶段，然后执行 flowctl dags list-import-errors 验证。",
 		Confidence:  evidence.ConfidenceHigh,
 		QueryCount:  4,
 		Citations: []Citation{{
 			Type:    "doc",
-			Title:   "Guide",
+			Title:   "FlowOps FAQ",
 			ID:      "doc_token_123",
-			Summary: "missing required scope: docx:document:read 权限变更 重新授权",
+			Summary: "FlowOps DAG import error billing_daily billing_region Variable.get",
 		}},
 	}, 100)
-	for _, want := range []string{"lark-cue", "cue_test", "Evidence", "Guide", "doc_token_123"} {
+	for _, want := range []string{"lark-cue", "cue_test", "Evidence", "FlowOps FAQ", "doc_token_123"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("styled card missing %q:\n%s", want, rendered)
 		}
@@ -578,10 +624,10 @@ func TestStyledRenderKeepsCardContent(t *testing.T) {
 
 func TestStyledStatusRenderKeepsSignalContent(t *testing.T) {
 	rendered := RenderStatusStyled(detector.Scenario{
-		Name:    "Feishu API auth/scope/token error",
-		Matched: []string{"docx:document:read", "missing required scope"},
-	}, "LarkApiError: missing required scope: docx:document:read\ntenant_access_token invalid", 100)
-	for _, want := range []string{"lark-cue detection", "DETECTED", "Feishu API auth/scope/token error", "Error excerpt", "LarkApiError", "Signals", "• docx:document:read", "Searching Feishu"} {
+		Name:    "FlowOps DAG import error",
+		Matched: []string{"FlowOps DAG import error billing_daily", "billing_daily billing_region Variable.get"},
+	}, "FlowOps DAG import error billing_daily billing_region Variable.get failed", 100)
+	for _, want := range []string{"lark-cue detection", "DETECTED", "FlowOps DAG import error", "Error excerpt", "billing_daily", "Signals", "• FlowOps DAG import error billing_daily", "Searching Feishu"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("styled status missing %q:\n%s", want, rendered)
 		}

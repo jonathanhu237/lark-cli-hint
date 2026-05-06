@@ -11,9 +11,6 @@ import (
 func Prepare(k card.KnowledgeCard) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "**lark-cue 知识卡** `%s`\n\n", k.ID)
-	if k.Fixture {
-		b.WriteString("**模式**\nDemo fixture / simulated Feishu content. Not real runtime retrieval.\n\n")
-	}
 	fmt.Fprintf(&b, "**场景**\n%s\n\n", k.Scenario)
 	fmt.Fprintf(&b, "**可能原因**\n%s\n\n", k.LikelyCause)
 	fmt.Fprintf(&b, "**建议下一步**\n%s\n\n", k.NextAction)
@@ -36,10 +33,6 @@ func Prepare(k card.KnowledgeCard) string {
 }
 
 func renderCitation(c card.Citation) string {
-	fixtureLabel := ""
-	if c.Fixture {
-		fixtureLabel = " | fixture"
-	}
 	switch c.Type {
 	case "im":
 		parts := []string{"群聊"}
@@ -55,7 +48,7 @@ func renderCitation(c card.Citation) string {
 		if c.Summary != "" {
 			parts = append(parts, c.Summary)
 		}
-		return strings.Join(parts, " | ") + fixtureLabel
+		return strings.Join(parts, " | ")
 	default:
 		label := firstNonEmpty(c.Title, c.URL, c.ID)
 		if c.URL != "" {
@@ -66,7 +59,7 @@ func renderCitation(c card.Citation) string {
 		if c.Summary != "" {
 			label += " | " + c.Summary
 		}
-		return label + fixtureLabel
+		return label
 	}
 }
 

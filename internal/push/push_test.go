@@ -10,40 +10,36 @@ import (
 	"lark-cue/internal/evidence"
 )
 
-func TestPrepareIncludesFixtureCaveatAndCitations(t *testing.T) {
+func TestPrepareIncludesCaveatAndCitations(t *testing.T) {
 	markdown := Prepare(card.KnowledgeCard{
 		ID:          "cue_test",
-		Scenario:    "检测到飞书 API 权限 / scope / token 错误。",
-		LikelyCause: "应用缺少 docx:document:read。",
-		NextAction:  "发布权限变更后重新授权。",
-		Caveat:      "当前使用显式 demo fixture，不能当作真实 Feishu 检索结果。",
+		Scenario:    "FlowOps DAG import error",
+		LikelyCause: "billing_daily 在解析阶段读取 billing_region Variable。",
+		NextAction:  "把 Variable.get 移到任务运行阶段后重新执行 flowctl check。",
+		Caveat:      "证据较弱，建议打开来源核对后再执行修复动作。",
 		Confidence:  evidence.ConfidenceHigh,
-		Fixture:     true,
 		Citations: []card.Citation{
 			{
 				Type:    "doc",
-				Title:   "Demo fixture: 权限指南",
-				URL:     "fixture://guide",
-				Summary: "missing required scope docx:document:read",
-				Fixture: true,
+				Title:   "FlowOps DAG Import Error 排障 FAQ",
+				URL:     "https://example.test/guide",
+				Summary: "billing_daily billing_region Variable.get",
 			},
 			{
 				Type:      "im",
-				ChatName:  "Demo fixture: 排障群",
+				ChatName:  "FlowOps 排障群",
 				Sender:    "李四",
 				Timestamp: "2026-05-05 21:46",
-				Summary:   "需要发布权限变更并重新授权",
-				Fixture:   true,
+				Summary:   "需要把 Variable.get 移到任务运行阶段",
 			},
 		},
 	})
 	for _, want := range []string{
-		"Demo fixture / simulated Feishu content",
-		"当前使用显式 demo fixture",
-		"Demo fixture: 权限指南",
-		"fixture://guide",
-		"Demo fixture: 排障群",
-		"需要发布权限变更并重新授权",
+		"证据较弱",
+		"FlowOps DAG Import Error 排障 FAQ",
+		"https://example.test/guide",
+		"FlowOps 排障群",
+		"需要把 Variable.get 移到任务运行阶段",
 	} {
 		if !strings.Contains(markdown, want) {
 			t.Fatalf("push markdown missing %q:\n%s", want, markdown)

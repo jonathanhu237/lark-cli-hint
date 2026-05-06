@@ -21,6 +21,27 @@ type Provider interface {
 	GenerateCard(ctx context.Context, input CardInput) (CardDraft, error)
 }
 
+type Planner interface {
+	PlanRetrieval(ctx context.Context, input PlanInput) (PlanDecision, error)
+}
+
+type CardProvider interface {
+	GenerateCard(ctx context.Context, input CardInput) (CardDraft, error)
+}
+
+type PlanInput struct {
+	Command  []string
+	ExitCode int
+	Output   string
+}
+
+type PlanDecision struct {
+	ShouldRetrieve bool     `json:"should_retrieve"`
+	Scenario       string   `json:"scenario"`
+	Reason         string   `json:"reason"`
+	Queries        []string `json:"queries"`
+}
+
 type CardInput struct {
 	Command    []string
 	Output     string
@@ -53,6 +74,51 @@ func NewOpenAICompatible(cfg config.LLMConfig) *OpenAICompatible {
 
 func (p *OpenAICompatible) available() bool {
 	return p != nil && p.apiKey != "" && p.model != ""
+}
+
+func (p *OpenAICompatible) Available() bool {
+	return p.available()
+}
+
+func (p *OpenAICompatible) PlanRetrieval(ctx context.Context, input PlanInput) (PlanDecision, error) {
+	if !p.available() {
+		return PlanDecision{}, errors.New("llm provider is not configured")
+	}
+	prompt := fmt.Sprintf(`Decide whether a failed CLI command should trigger Feishu internal knowledge retrieval.
+Return only JSON with keys: should_retrieve, scenario, reason, queries.
+
+Use should_retrieve=true only when the failure likely depends on enterprise/internal knowledge such as:
+- internal CLI or platform behavior
+- deployment, approval, configuration, scheduling, permission, or team workflow rules
+- historical incidents, internal SOPs, or team-specific troubleshooting knowledge
+
+Use should_retrieve=false for ordinary local errors such as missing local files, obvious shell usage mistakes, syntax errors, or dependency installation issues that do not need enterprise knowledge.
+
+Queries must be short keyword-style Feishu search phrases, not natural-language questions.
+Prefer exact terms from the command and terminal output: app/CLI name, service/DAG/job name, error code, config key, exception name, command subcommand, and internal platform name if inferred.
+Return 0 queries when should_retrieve is false. Return 3-8 queries when should_retrieve is true.
+Do not invent exact document titles, URLs, chat IDs, or final answers.
+
+Command: %s
+Exit code: %d
+Terminal output:
+%s`, runner.CommandString(input.Command), input.ExitCode, truncate(input.Output, 5000))
+
+	text, err := p.chat(ctx, "You plan keyword retrieval from enterprise Feishu knowledge.", prompt)
+	if err != nil {
+		return PlanDecision{}, err
+	}
+	var decision PlanDecision
+	if err := json.Unmarshal([]byte(extractJSONObject(text)), &decision); err != nil {
+		return PlanDecision{}, err
+	}
+	decision.Scenario = strings.TrimSpace(decision.Scenario)
+	decision.Reason = strings.TrimSpace(decision.Reason)
+	decision.Queries = NormalizeQueries(decision.Queries, 8, 120)
+	if !decision.ShouldRetrieve {
+		decision.Queries = nil
+	}
+	return decision, nil
 }
 
 func (p *OpenAICompatible) ExpandQueries(ctx context.Context, command []string, output string, scenario detector.Scenario, seeds []string) ([]string, error) {
@@ -194,6 +260,38 @@ func parseLines(text string) []string {
 		line = strings.TrimSpace(strings.Trim(line, "-*0123456789. \t\"'`"))
 		if line != "" {
 			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func NormalizeQueries(values []string, maxCount int, maxLen int) []string {
+	if maxCount <= 0 {
+		return nil
+	}
+	if maxLen <= 0 {
+		maxLen = 120
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		value = strings.Trim(value, "`'\"")
+		if value == "" {
+			continue
+		}
+		runes := []rune(value)
+		if len(runes) > maxLen {
+			value = string(runes[:maxLen])
+		}
+		key := strings.ToLower(value)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, value)
+		if len(out) >= maxCount {
+			break
 		}
 	}
 	return out

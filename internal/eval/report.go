@@ -20,13 +20,14 @@ const (
 
 type ReadResult struct {
 	Records        []Record
+	PlannerRecords []Record
+	Events         []Record
 	MalformedLines int
 }
 
 type Summary struct {
 	TotalRuns         int
 	StatusCounts      map[string]int
-	FixtureRuns       int
 	RealRuns          int
 	RunsWithSources   int
 	TotalSources      int
@@ -34,6 +35,11 @@ type Summary struct {
 	AverageQueryCount float64
 	AverageLatencyMS  float64
 	FeedbackCounts    map[string]int
+	PlannerRuns       int
+	PlannerRetrieve   int
+	PlannerSkip       int
+	PlannerUnknown    int
+	AveragePlannerMS  float64
 	MalformedLines    int
 	Limit             int
 }
@@ -49,7 +55,11 @@ func ReadCueRecords(path string) (ReadResult, error) {
 	defer file.Close()
 
 	var result ReadResult
-	indexByCardID := map[string]int{}
+	type cueIndex struct {
+		record int
+		event  int
+	}
+	indexByCardID := map[string]cueIndex{}
 	processLine := func(raw []byte) {
 		line := strings.TrimSpace(string(raw))
 		if line == "" {
@@ -63,15 +73,20 @@ func ReadCueRecords(path string) (ReadResult, error) {
 		switch record.Type {
 		case "cue":
 			result.Records = append(result.Records, record)
+			result.Events = append(result.Events, record)
 			if record.CardID != "" {
-				indexByCardID[record.CardID] = len(result.Records) - 1
+				indexByCardID[record.CardID] = cueIndex{record: len(result.Records) - 1, event: len(result.Events) - 1}
 			}
+		case "planner":
+			result.PlannerRecords = append(result.PlannerRecords, record)
+			result.Events = append(result.Events, record)
 		case "feedback_update":
 			if record.CardID == "" || record.Feedback == "" {
 				return
 			}
 			if index, ok := indexByCardID[record.CardID]; ok {
-				result.Records[index].Feedback = record.Feedback
+				result.Records[index.record].Feedback = record.Feedback
+				result.Events[index.event].Feedback = record.Feedback
 			}
 		}
 	}
@@ -121,25 +136,42 @@ func LimitCueRecords(records []Record, limit int) []Record {
 	return records[len(records)-limit:]
 }
 
+func LimitReadResult(result ReadResult, limit int) ReadResult {
+	if limit <= 0 || len(result.Events) <= limit {
+		return result
+	}
+	limited := ReadResult{MalformedLines: result.MalformedLines}
+	limited.Events = append(limited.Events, result.Events[len(result.Events)-limit:]...)
+	for _, event := range limited.Events {
+		switch event.Type {
+		case "cue":
+			limited.Records = append(limited.Records, event)
+		case "planner":
+			limited.PlannerRecords = append(limited.PlannerRecords, event)
+		}
+	}
+	return limited
+}
+
 func Summarize(records []Record, malformedLines int, limit int) Summary {
+	return SummarizeResult(ReadResult{Records: records, Events: records, MalformedLines: malformedLines}, limit)
+}
+
+func SummarizeResult(result ReadResult, limit int) Summary {
 	summary := Summary{
 		StatusCounts:   map[string]int{},
 		FeedbackCounts: map[string]int{},
-		MalformedLines: malformedLines,
+		MalformedLines: result.MalformedLines,
 		Limit:          limit,
 	}
-	for _, record := range records {
+	for _, record := range result.Records {
 		summary.TotalRuns++
 		status := strings.TrimSpace(record.RetrievalStatus)
 		if status == "" {
 			status = "unknown"
 		}
 		summary.StatusCounts[status]++
-		if status == "fixture" {
-			summary.FixtureRuns++
-		} else {
-			summary.RealRuns++
-		}
+		summary.RealRuns++
 
 		sourceCount := len(record.Sources)
 		summary.TotalSources += sourceCount
@@ -161,16 +193,52 @@ func Summarize(records []Record, malformedLines int, limit int) Summary {
 		summary.AverageQueryCount /= count
 		summary.AverageLatencyMS /= count
 	}
+	for _, record := range result.PlannerRecords {
+		summary.PlannerRuns++
+		if record.ShouldRetrieve == nil {
+			summary.PlannerUnknown++
+		} else if *record.ShouldRetrieve {
+			summary.PlannerRetrieve++
+		} else {
+			summary.PlannerSkip++
+		}
+		summary.AveragePlannerMS += float64(record.LatencyMS)
+	}
+	if summary.PlannerRuns > 0 {
+		summary.AveragePlannerMS /= float64(summary.PlannerRuns)
+	}
 	return summary
 }
 
 func RenderSummary(summary Summary) string {
 	var b strings.Builder
 	b.WriteString("lark-cue validation report\n\n")
-	if summary.TotalRuns == 0 {
-		b.WriteString("No cue records found.\n")
+	if summary.TotalRuns == 0 && summary.PlannerRuns == 0 {
+		b.WriteString("No cue or planner records found.\n")
 		if summary.MalformedLines > 0 {
 			fmt.Fprintf(&b, "Warnings: skipped %d malformed log line(s).\n", summary.MalformedLines)
+		}
+		return b.String()
+	}
+
+	if summary.PlannerRuns > 0 {
+		fmt.Fprintf(&b, "Planner\n")
+		fmt.Fprintf(&b, "- decisions: %d", summary.PlannerRuns)
+		if summary.Limit > 0 {
+			fmt.Fprintf(&b, " (latest %d max)", summary.Limit)
+		}
+		b.WriteString("\n")
+		fmt.Fprintf(&b, "- retrieve: %d\n", summary.PlannerRetrieve)
+		fmt.Fprintf(&b, "- skip: %d\n", summary.PlannerSkip)
+		if summary.PlannerUnknown > 0 {
+			fmt.Fprintf(&b, "- unknown: %d\n", summary.PlannerUnknown)
+		}
+		fmt.Fprintf(&b, "- avg planner latency: %s\n\n", formatMillis(summary.AveragePlannerMS))
+	}
+
+	if summary.TotalRuns == 0 {
+		if summary.MalformedLines > 0 {
+			fmt.Fprintf(&b, "Warnings\n- skipped malformed log lines: %d\n", summary.MalformedLines)
 		}
 		return b.String()
 	}
@@ -182,7 +250,7 @@ func RenderSummary(summary Summary) string {
 	}
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "- retrieval status: %s\n", renderStatusCounts(summary.StatusCounts))
-	fmt.Fprintf(&b, "- fixture runs: %d\n\n", summary.FixtureRuns)
+	b.WriteString("\n")
 
 	fmt.Fprintf(&b, "Evidence\n")
 	fmt.Fprintf(&b, "- citation coverage: %d/%d (%s)\n", summary.RunsWithSources, summary.TotalRuns, percent(summary.RunsWithSources, summary.TotalRuns))
@@ -231,8 +299,21 @@ func RenderSummaryStyled(summary Summary, width int) string {
 	sections := []string{
 		title.Render("lark-cue validation"),
 	}
+	if summary.TotalRuns == 0 && summary.PlannerRuns == 0 {
+		sections = append(sections, body.Render("No cue or planner records found. Run a cue demo first, then rerun this report."))
+		if summary.MalformedLines > 0 {
+			sections = append(sections, warnStyle.Render(fmt.Sprintf("Warnings: skipped %d malformed log line(s).", summary.MalformedLines)))
+		}
+		return box.Render(strings.Join(sections, "\n\n")) + "\n"
+	}
+
+	if summary.PlannerRuns > 0 {
+		sections = append(sections,
+			renderKV(label, body, "Planner", fmt.Sprintf("%d decisions%s\nRetrieve %d / skip %d / unknown %d\nAverage planner latency: %s", summary.PlannerRuns, limitSuffix(summary.Limit), summary.PlannerRetrieve, summary.PlannerSkip, summary.PlannerUnknown, formatMillis(summary.AveragePlannerMS))),
+		)
+	}
+
 	if summary.TotalRuns == 0 {
-		sections = append(sections, body.Render("No cue records found. Run a cue demo first, then rerun this report."))
 		if summary.MalformedLines > 0 {
 			sections = append(sections, warnStyle.Render(fmt.Sprintf("Warnings: skipped %d malformed log line(s).", summary.MalformedLines)))
 		}
@@ -241,7 +322,7 @@ func RenderSummaryStyled(summary Summary, width int) string {
 
 	sections = append(sections,
 		renderKV(label, body, "Runs", fmt.Sprintf("%d cue runs%s", summary.TotalRuns, limitSuffix(summary.Limit))),
-		renderKV(label, body, "Retrieval", fmt.Sprintf("%s\nFixture: %d", renderStatusCounts(summary.StatusCounts), summary.FixtureRuns)),
+		renderKV(label, body, "Retrieval", renderStatusCounts(summary.StatusCounts)),
 		renderKV(label, body, "Evidence", fmt.Sprintf("Citation coverage: %d/%d (%s)\nSources: %d total, %.1f per run", summary.RunsWithSources, summary.TotalRuns, percent(summary.RunsWithSources, summary.TotalRuns), summary.TotalSources, summary.AverageSources)),
 		renderKV(label, body, "Runtime", fmt.Sprintf("Average latency: %s\nAverage queries/run: %.1f", formatMillis(summary.AverageLatencyMS), summary.AverageQueryCount)),
 		renderKV(label, body, "Feedback", renderFeedback(summary.FeedbackCounts)),
@@ -257,7 +338,7 @@ func renderKV(labelStyle, bodyStyle lipgloss.Style, key, value string) string {
 }
 
 func renderStatusCounts(counts map[string]int) string {
-	ordered := []string{"ok", "partial", "failed", "fixture", "unknown"}
+	ordered := []string{"ok", "partial", "failed", "unknown"}
 	seen := map[string]bool{}
 	parts := make([]string, 0, len(ordered))
 	for _, key := range ordered {

@@ -17,7 +17,6 @@ type Status string
 
 const (
 	StatusOK      Status = "ok"
-	StatusFixture Status = "fixture"
 	StatusPartial Status = "partial"
 	StatusFailed  Status = "failed"
 )
@@ -33,7 +32,6 @@ type Source struct {
 	Sender    string
 	Timestamp string
 	Fetched   bool
-	Fixture   bool
 }
 
 type jsonRunner interface {
@@ -190,34 +188,6 @@ func (r *LarkRetriever) searchMessages(ctx context.Context, query string) ([]Sou
 		sources = append(sources, source)
 	}
 	return sources, nil
-}
-
-type FixtureRetriever struct{}
-
-func NewFixtureRetriever() FixtureRetriever {
-	return FixtureRetriever{}
-}
-
-func (FixtureRetriever) Retrieve(ctx context.Context, queries []string) ([]Source, Status, error) {
-	return []Source{
-		{
-			Type:    "doc",
-			Title:   "Demo fixture: 飞书应用权限配置避坑指南",
-			URL:     "fixture://feishu-permission-guide",
-			Content: "missing required scope: docx:document:read。需要检查应用是否添加 docx:document:read，发布权限变更，并重新授权本地开发身份。旧 token 不会自动包含新 scope。",
-			Fetched: true,
-			Fixture: true,
-		},
-		{
-			Type:      "im",
-			ChatName:  "Demo fixture: 星桥开放平台排障群",
-			Sender:    "李四",
-			Timestamp: "2026-05-05 21:46",
-			Content:   "这个我之前踩过，不是代码逻辑问题。一般是应用没有加 docx:document:read 权限，或者权限加了但没有发布权限变更。",
-			Fetched:   true,
-			Fixture:   true,
-		},
-	}, StatusFixture, nil
 }
 
 func arrayAt(obj map[string]any, path ...string) []any {

@@ -21,6 +21,7 @@ type LLMConfig struct {
 }
 
 type FeishuConfig struct {
+	Profile         string
 	DefaultPushChat string
 	SendPushDefault bool
 }
@@ -83,6 +84,8 @@ func loadFile(path string, cfg *Config) error {
 			cfg.LLM.Model = value
 		case "feishu.default_push_chat":
 			cfg.Feishu.DefaultPushChat = value
+		case "feishu.profile":
+			cfg.Feishu.Profile = value
 		case "feishu.send_push_default":
 			cfg.Feishu.SendPushDefault, _ = strconv.ParseBool(value)
 		case "evaluation.log_path":
@@ -105,12 +108,24 @@ func applyEnv(cfg *Config) {
 	if value := os.Getenv("LARK_CUE_PUSH_CHAT"); value != "" {
 		cfg.Feishu.DefaultPushChat = value
 	}
+	if value := firstNonEmpty(os.Getenv("LARK_CUE_FEISHU_PROFILE"), os.Getenv("LARK_CUE_LARK_PROFILE")); value != "" {
+		cfg.Feishu.Profile = value
+	}
 	if value := os.Getenv("LARK_CUE_SEND_PUSH_DEFAULT"); value != "" {
 		cfg.Feishu.SendPushDefault, _ = strconv.ParseBool(value)
 	}
 	if value := os.Getenv("LARK_CUE_EVAL_LOG"); value != "" {
 		cfg.Evaluation.LogPath = value
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func stripComment(line string) string {

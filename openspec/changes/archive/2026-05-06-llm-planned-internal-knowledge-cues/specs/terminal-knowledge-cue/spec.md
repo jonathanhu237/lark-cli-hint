@@ -1,27 +1,4 @@
-# terminal-knowledge-cue Specification
-
-## Purpose
-`terminal-knowledge-cue` covers the `lark-cue` terminal workflow: wrapping developer commands, requiring LLM-planned failed-command knowledge decisions, retrieving cited Feishu knowledge through `lark-cli`, rendering actionable knowledge cards, controlling optional Feishu push side effects, and recording planner/cue evaluation data for demo validation.
-
-## Requirements
-### Requirement: Command Wrapper
-The system SHALL provide a `lark-cue run -- <command>` CLI flow that requires LLM configuration before executing the wrapped command, streams stdout and stderr to the terminal in real time, captures a bounded output buffer for analysis, and returns the wrapped command exit code after any cue handling.
-
-#### Scenario: Missing LLM configuration blocks execution
-- **WHEN** the user runs `lark-cue run -- <command>` without required LLM configuration
-- **THEN** the system MUST print a clear configuration error and MUST NOT execute the wrapped command
-
-#### Scenario: Successful command does not trigger a cue
-- **WHEN** a wrapped command exits with code `0`
-- **THEN** the system MUST return exit code `0` and MUST NOT run the planner, Feishu knowledge retrieval, or display a knowledge card
-
-#### Scenario: Failed command preserves exit code
-- **WHEN** a wrapped command exits non-zero
-- **THEN** the system MUST preserve and return the wrapped command exit code even if planning, retrieval, or card generation succeeds
-
-#### Scenario: Output is streamed while captured
-- **WHEN** a wrapped command writes stdout or stderr before exiting
-- **THEN** the system MUST display that output to the terminal without waiting for planner analysis and MUST retain only a bounded recent buffer for analysis
+## ADDED Requirements
 
 ### Requirement: LLM Retrieval Planner
 The system SHALL use a configured LLM planner to decide whether a failed wrapped command should trigger Feishu internal knowledge retrieval and to produce keyword-style search queries.
@@ -41,6 +18,27 @@ The system SHALL use a configured LLM planner to decide whether a failed wrapped
 #### Scenario: Planner query style
 - **WHEN** the planner returns queries
 - **THEN** the queries MUST be treated as keyword-style Feishu search phrases and normalized only by trimming, dropping empty entries, de-duplicating, and limiting the count
+
+## MODIFIED Requirements
+
+### Requirement: Command Wrapper
+The system SHALL provide a `lark-cue run -- <command>` CLI flow that requires LLM configuration before executing the wrapped command, streams stdout and stderr to the terminal in real time, captures a bounded output buffer for analysis, and returns the wrapped command exit code after any cue handling.
+
+#### Scenario: Missing LLM configuration blocks execution
+- **WHEN** the user runs `lark-cue run -- <command>` without required LLM configuration
+- **THEN** the system MUST print a clear configuration error and MUST NOT execute the wrapped command
+
+#### Scenario: Successful command does not trigger a cue
+- **WHEN** a wrapped command exits with code `0`
+- **THEN** the system MUST return exit code `0` and MUST NOT run the planner, Feishu knowledge retrieval, or display a knowledge card
+
+#### Scenario: Failed command preserves exit code
+- **WHEN** a wrapped command exits non-zero
+- **THEN** the system MUST preserve and return the wrapped command exit code even if planning, retrieval, or card generation succeeds
+
+#### Scenario: Output is streamed while captured
+- **WHEN** a wrapped command writes stdout or stderr before exiting
+- **THEN** the system MUST display that output to the terminal without waiting for planner analysis and MUST retain only a bounded recent buffer for analysis
 
 ### Requirement: Real Feishu Retrieval
 The system SHALL use `lark-cli` at runtime to search real Feishu Docs/Wiki/Sheets and IM messages for candidate evidence using planner-generated keyword queries, without pinning known demo document titles, URLs, chat IDs, or final answers as the retrieval path.
@@ -103,43 +101,6 @@ The system SHALL generate a compact terminal knowledge card using only the wrapp
 - **WHEN** LLM card generation is unavailable or invalid after successful planning
 - **THEN** the system MUST use a deterministic template card based on planner output, scored evidence, and source metadata
 
-### Requirement: Source Citations
-The system SHALL cite Feishu sources with enough metadata to support traceability while keeping terminal output compact.
-
-#### Scenario: Document citation
-- **WHEN** a Docs/Wiki source supports the card
-- **THEN** the citation MUST include the source title and available URL or identifier
-
-#### Scenario: IM citation
-- **WHEN** an IM message supports the card
-- **THEN** the citation MUST include the group name when available, speaker when available, timestamp when available, and a short summary rather than a long raw message transcript
-
-### Requirement: Feishu Push Control
-The system SHALL provide terminal card delivery as the default required path and SHALL make Feishu group push side effects explicit.
-
-#### Scenario: Push is prepared by request
-- **WHEN** a user requests group push preparation without the explicit send flag
-- **THEN** the system MUST render or store a preview of the group message and MUST NOT send it
-
-#### Scenario: Push requires explicit send
-- **WHEN** a user provides the explicit send flag and a target can be resolved
-- **THEN** the system MAY send the prepared message through `lark-cli`
-
-### Requirement: Configuration
-The system SHALL support environment-variable and local-file configuration, with environment variables taking precedence, SHALL require LLM configuration for `lark-cue run`, and SHALL allow runtime Feishu retrieval to use the same `lark-cli` profile used for demo seeding.
-
-#### Scenario: Environment overrides config
-- **WHEN** a value is present both in the local config file and in a supported `LARK_CUE_*` environment variable
-- **THEN** the system MUST use the environment variable value
-
-#### Scenario: Feishu profile is forwarded
-- **WHEN** a Feishu profile is configured for `lark-cue`
-- **THEN** runtime retrieval and explicit push sending MUST pass that profile to `lark-cli`
-
-#### Scenario: Fixture mode is not available as product path
-- **WHEN** the user runs `lark-cue run`
-- **THEN** the system MUST NOT expose or silently activate local fixture retrieval
-
 ### Requirement: Feedback and Evaluation Logging
 The system SHALL create local evaluation records for planner decisions and cue attempts and SHALL support useful/not useful feedback collection for generated knowledge cards.
 
@@ -195,3 +156,31 @@ The system SHALL provide a read-only `lark-cue eval report` flow that summarizes
 - **THEN** the system MAY render a styled validation card
 - **WHEN** report output is redirected, `NO_COLOR` is set, or the terminal is not style-capable
 - **THEN** the system MUST produce readable plain text without ANSI styling
+
+### Requirement: Runtime Feishu Profile
+The system SHALL allow `lark-cue run` to pass a configured `lark-cli` profile to real Feishu retrieval and explicit push sending.
+
+#### Scenario: Profile is shared with retrieval
+- **WHEN** a Feishu profile is configured for `lark-cue run`
+- **THEN** the system MUST pass that profile to `lark-cli` retrieval commands
+
+#### Scenario: Profile is shared with explicit push sending
+- **WHEN** a Feishu profile is configured and the user explicitly requests push sending
+- **THEN** the system MUST pass that profile to the `lark-cli` push command
+
+## REMOVED Requirements
+
+### Requirement: Feishu Error Detection
+**Reason**: Hardcoded Feishu API scope/token detection makes the product a scenario-specific rules helper instead of a general internal knowledge cue assistant.
+
+**Migration**: Use the LLM Retrieval Planner to decide whether any failed command should retrieve Feishu knowledge.
+
+### Requirement: Query Generation
+**Reason**: Deterministic Feishu API seed extraction and LLM query expansion are replaced by a planner that jointly decides retrieval and emits keyword queries.
+
+**Migration**: Use planner queries as the retrieval input after minimal normalization.
+
+### Requirement: Configuration and Fixture Mode
+**Reason**: Public fixture mode conflicts with the new product contract that requires LLM configuration and real `lark-cli` retrieval.
+
+**Migration**: Remove public `--demo-fixture`; use mocked dependencies in unit tests and opt-in real Feishu E2E for integration coverage.

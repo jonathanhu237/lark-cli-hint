@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE="${ROOT_DIR}/docker-compose.yaml"
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  ./flowctl init
+  ./flowctl check [dag_id]
+  ./flowctl airflow <args...>
+  ./flowctl up
+  ./flowctl down
+  ./flowctl clean
+
+Commands:
+  init          Initialize the local Airflow metadata DB once.
+  check         Run the real Airflow import-error check for a DAG.
+  airflow       Pass arguments to the real Airflow CLI in Docker Compose.
+  up            Start local webserver and scheduler for inspection.
+  down          Stop local services.
+  clean         Remove generated local Airflow state for a clean demo.
+USAGE
+}
+
+command="${1:-}"
+case "${command}" in
+  ""|-h|--help|help)
+    usage
+    exit 0
+    ;;
+esac
+
+if docker compose version >/dev/null 2>&1; then
+  COMPOSE=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1; then
+  COMPOSE=(docker-compose)
+else
+  echo "flowctl: Docker Compose is required. Install Docker Desktop or docker-compose." >&2
+  exit 127
+fi
+
+run_airflow() {
+  mkdir -p "${ROOT_DIR}/logs" "${ROOT_DIR}/plugins"
+  touch "${ROOT_DIR}/airflow.db"
+  chmod ugo+rw "${ROOT_DIR}/airflow.db"
+  chmod ugo+rwx "${ROOT_DIR}/logs" "${ROOT_DIR}/plugins"
+  "${COMPOSE[@]}" -f "${COMPOSE_FILE}" --profile cli run --rm airflow-cli -lc "airflow $*"
+}
+case "${command}" in
+  init)
+    run_airflow "db migrate"
+    run_airflow "users create --username admin --firstname FlowOps --lastname Demo --role Admin --email flowops-demo@example.com --password admin || true"
+    ;;
+  check)
+    dag_id="${2:-billing_daily}"
+    run_airflow "dags list-import-errors"
+    run_airflow "dags show ${dag_id}"
+    ;;
+  airflow)
+    shift
+    if [[ "$#" -eq 0 ]]; then
+      usage >&2
+      exit 2
+    fi
+    run_airflow "$*"
+    ;;
+  up)
+    "${COMPOSE[@]}" -f "${COMPOSE_FILE}" up -d airflow-webserver airflow-scheduler
+    ;;
+  down)
+    "${COMPOSE[@]}" -f "${COMPOSE_FILE}" down
+    ;;
+  clean)
+    "${COMPOSE[@]}" -f "${COMPOSE_FILE}" down --remove-orphans
+    rm -f "${ROOT_DIR}/airflow.db" "${ROOT_DIR}/airflow.db-shm" "${ROOT_DIR}/airflow.db-wal" "${ROOT_DIR}/airflow.cfg"
+    rm -rf "${ROOT_DIR}/logs" "${ROOT_DIR}/plugins/__pycache__" "${ROOT_DIR}/tmp" "${ROOT_DIR}/.tmp"
+    ;;
+  *)
+    echo "flowctl: unknown command: ${command}" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
