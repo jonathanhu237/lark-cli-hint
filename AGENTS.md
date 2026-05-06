@@ -115,7 +115,7 @@ It should usually contain:
 
 - Detected scenario.
 - Likely cause or relevant knowledge fragment.
-- One recommended next action.
+- A recommended action sequence.
 - Evidence sources.
 - Confidence or caveat when evidence is weak.
 

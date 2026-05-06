@@ -17,9 +17,12 @@ func TestPrepareIncludesCaveatAndCitations(t *testing.T) {
 		PlannerReason: "DAG import error mentions billing_region.",
 		Queries:       []string{"FlowOps DAG import error", "billing_daily billing_region"},
 		LikelyCause:   "billing_daily 在解析阶段读取 billing_region Variable。",
-		NextAction:    "把 Variable.get 移到任务运行阶段后重新执行 flowctl check。",
-		Caveat:        "证据较弱，建议打开来源核对后再执行修复动作。",
-		Confidence:    evidence.ConfidenceHigh,
+		ActionPlan: []string{
+			"把 Variable.get 移到任务运行阶段。",
+			"重新执行 flowctl check。",
+		},
+		Caveat:     "证据较弱，建议打开来源核对后再执行修复动作。",
+		Confidence: evidence.ConfidenceHigh,
 		Citations: []card.Citation{
 			{
 				Type:    "doc",
@@ -41,6 +44,8 @@ func TestPrepareIncludesCaveatAndCitations(t *testing.T) {
 		"LLM Plan",
 		"DAG import error mentions billing_region",
 		"billing_daily billing_region",
+		"处理序列",
+		"重新执行 flowctl check",
 		"FlowOps DAG Import Error 排障 FAQ",
 		"https://example.test/guide",
 		"FlowOps 排障群",

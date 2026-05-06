@@ -254,14 +254,14 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 	}
 
 	scenario := scenarioFromDecision(decision)
+	queries := decision.Queries
 	if shouldStyleOutput(stderr) {
 		fmt.Fprintln(stderr)
-		fmt.Fprint(stderr, card.RenderStatusStyled(scenario, analysisOutput, terminalWidth(stderr)))
+		fmt.Fprint(stderr, card.RenderPlannerStatusStyled(scenario, decision.Reason, queries, analysisOutput, terminalWidth(stderr)))
 	} else {
-		fmt.Fprintf(stderr, "\nlark-cue: planner selected %s; searching Feishu knowledge...\n", scenario.Name)
+		fmt.Fprint(stderr, card.RenderPlannerStatus(scenario, decision.Reason, queries))
 	}
 
-	queries := decision.Queries
 	if opts.verbose {
 		fmt.Fprintf(stderr, "lark-cue: LLM configured model=%s base_url=%s\n", cfg.LLM.Model, cfg.LLM.BaseURL)
 		fmt.Fprintf(stderr, "lark-cue: planner reason: %s\n", decision.Reason)

@@ -46,7 +46,7 @@ type KnowledgeCard struct {
 	PlannerReason   string
 	Queries         []string
 	LikelyCause     string
-	NextAction      string
+	ActionPlan      []string
 	Caveat          string
 	Citations       []Citation
 	Confidence      evidence.Confidence
@@ -106,31 +106,47 @@ func Build(ctx context.Context, input Input) KnowledgeCard {
 			if input.LLMStatus != nil {
 				input.LLMStatus.Error = err.Error()
 			}
-		} else if strings.TrimSpace(draft.LikelyCause) != "" || strings.TrimSpace(draft.Caveat) != "" {
-			card.LikelyCause = strings.TrimSpace(draft.LikelyCause)
-			card.NextAction = strings.TrimSpace(draft.NextAction)
-			card.Caveat = strings.TrimSpace(draft.Caveat)
-			if draftGrounded(draft, input.Evidence) {
-				if input.LLMStatus != nil {
-					input.LLMStatus.Accepted = true
+		} else {
+			actionPlan := cleanActionPlan(draft.ActionPlan)
+			hasDraftText := strings.TrimSpace(draft.LikelyCause) != "" || strings.TrimSpace(draft.Caveat) != ""
+			if hasDraftText || len(actionPlan) > 0 {
+				textGrounded := !hasDraftText || draftTextGrounded(draft, input.Evidence)
+				if textGrounded {
+					card.LikelyCause = strings.TrimSpace(draft.LikelyCause)
+					card.Caveat = strings.TrimSpace(draft.Caveat)
+				} else {
+					if input.LLMStatus != nil && hasDraftText {
+						input.LLMStatus.Error = "draft text was not grounded in cited snippets"
+					}
 				}
-				enforceConfidence(&card, input.Confidence, input.RetrievalStatus, input.RetrievalError, input.Evidence)
-				if card.NextAction == "" {
-					card.NextAction = fallbackNextAction(input.Confidence, input.Evidence)
+				if textGrounded || len(actionPlan) > 0 {
+					if !textGrounded {
+						card.LikelyCause = fallbackCause(input.Confidence, input.RetrievalStatus, input.RetrievalError, input.Evidence)
+						card.Caveat = fallbackCaveat(input.Confidence, input.RetrievalStatus, input.RetrievalError)
+					}
+					card.ActionPlan = actionPlan
+					if input.LLMStatus != nil {
+						input.LLMStatus.Accepted = true
+					}
+					enforceConfidence(&card, input.Confidence, input.RetrievalStatus, input.RetrievalError, input.Evidence)
+					if strings.TrimSpace(card.LikelyCause) == "" {
+						card.LikelyCause = fallbackCause(input.Confidence, input.RetrievalStatus, input.RetrievalError, input.Evidence)
+					}
+					if len(card.ActionPlan) == 0 {
+						card.ActionPlan = fallbackActionPlan(input.Confidence, input.Evidence)
+					}
+					return card
 				}
-				return card
 			}
-			if input.LLMStatus != nil {
-				input.LLMStatus.Error = "draft was not grounded in cited snippets"
+			if input.LLMStatus != nil && !hasDraftText && len(actionPlan) == 0 {
+				input.LLMStatus.Error = "empty card draft"
 			}
-		} else if input.LLMStatus != nil {
-			input.LLMStatus.Error = "empty card draft"
 		}
 	}
 
 	card.LikelyCause = fallbackCause(input.Confidence, input.RetrievalStatus, input.RetrievalError, input.Evidence)
 	card.Caveat = fallbackCaveat(input.Confidence, input.RetrievalStatus, input.RetrievalError)
-	card.NextAction = fallbackNextAction(input.Confidence, input.Evidence)
+	card.ActionPlan = fallbackActionPlan(input.Confidence, input.Evidence)
 	return card
 }
 
@@ -145,8 +161,8 @@ func Render(k KnowledgeCard) string {
 	}
 	b.WriteString("Likely Cause\n")
 	b.WriteString(valueOr(k.LikelyCause, "未找到足够证据判断具体原因。") + "\n\n")
-	b.WriteString("Next Action\n")
-	b.WriteString(valueOr(k.NextAction, "打开内部来源核对后再执行修复动作。") + "\n\n")
+	b.WriteString("Action Plan\n")
+	b.WriteString(renderActionPlan(k.ActionPlan) + "\n\n")
 	b.WriteString("Sources\n")
 	if len(k.Citations) == 0 {
 		b.WriteString("- 未找到可支撑结论的内部来源。\n")
@@ -216,7 +232,7 @@ func RenderStyled(k KnowledgeCard, width int) string {
 		sections = append(sections, renderStyledKV(label, body, "LLM Plan", plan, contentWidth))
 	}
 	sections = append(sections, renderStyledKV(label, body, "Likely cause", valueOr(k.LikelyCause, "未找到足够证据判断具体原因。"), contentWidth))
-	sections = append(sections, renderStyledKV(label, body, "Next action", valueOr(k.NextAction, "打开内部来源核对后再执行修复动作。"), contentWidth))
+	sections = append(sections, renderStyledKV(label, body, "Action plan", renderActionPlan(k.ActionPlan), contentWidth))
 
 	evidenceBlock := []string{label.Render("Evidence")}
 	if len(k.Citations) == 0 {
@@ -248,9 +264,30 @@ func RenderStyled(k KnowledgeCard, width int) string {
 	return box.Render(strings.Join(sections, "\n\n")) + "\n"
 }
 
-func RenderStatusStyled(scenario detector.Scenario, output string, width int) string {
+func RenderPlannerStatus(scenario detector.Scenario, reason string, queries []string) string {
+	var b strings.Builder
+	b.WriteString("\nlark-cue LLM plan\n")
+	b.WriteString("Scenario\n")
+	b.WriteString(scenario.Name + "\n\n")
+	if strings.TrimSpace(reason) != "" {
+		b.WriteString("Reason\n")
+		b.WriteString(strings.TrimSpace(reason) + "\n\n")
+	}
+	if len(queries) > 0 {
+		b.WriteString("Queries\n")
+		for _, query := range cleanQueries(queries) {
+			b.WriteString("- " + query + "\n")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("Next\n")
+	b.WriteString("Searching Feishu Docs/Wiki and IM evidence...\n")
+	return b.String()
+}
+
+func RenderPlannerStatusStyled(scenario detector.Scenario, reason string, queries []string, output string, width int) string {
 	if width < 60 {
-		return fmt.Sprintf("\nlark-cue: detected %s; searching Feishu knowledge...\n", scenario.Name)
+		return RenderPlannerStatus(scenario, reason, queries)
 	}
 	cardWidth := clamp(width-4, 72, 104)
 	contentWidth := cardWidth - 6
@@ -265,8 +302,8 @@ func RenderStatusStyled(scenario detector.Scenario, output string, width int) st
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(accent).
 		Padding(1, 2)
-	title := lipgloss.NewStyle().Bold(true).Foreground(accent).Render("lark-cue detection")
-	badge := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#071B10")).Background(ok).Padding(0, 1).Render("DETECTED")
+	title := lipgloss.NewStyle().Bold(true).Foreground(accent).Render("lark-cue LLM plan")
+	badge := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#071B10")).Background(ok).Padding(0, 1).Render("PLANNED")
 	label := lipgloss.NewStyle().Bold(true).Foreground(muted)
 	body := lipgloss.NewStyle().Foreground(text).Width(contentWidth)
 
@@ -274,14 +311,21 @@ func RenderStatusStyled(scenario detector.Scenario, output string, width int) st
 		title + "  " + badge,
 		renderStyledKV(label, body, "Scenario", scenario.Name, contentWidth),
 	}
+	if strings.TrimSpace(reason) != "" {
+		lines = append(lines, renderStyledKV(label, body, "Reason", strings.TrimSpace(reason), contentWidth))
+	}
+	if len(queries) > 0 {
+		lines = append(lines, renderStyledKV(label, body, "Queries", renderBulletList(cleanQueries(queries), contentWidth), contentWidth))
+	}
 	if excerpt := failureExcerpt(output, scenario.Matched, 2); excerpt != "" {
 		lines = append(lines, renderStyledKV(label, body, "Error excerpt", excerpt, contentWidth))
 	}
-	if len(scenario.Matched) > 0 {
-		lines = append(lines, renderStyledKV(label, body, "Signals", renderBulletList(scenario.Matched, contentWidth), contentWidth))
-	}
 	lines = append(lines, renderStyledKV(label, body, "Next", "Searching Feishu Docs/Wiki and IM evidence...", contentWidth))
 	return box.Render(strings.Join(lines, "\n\n")) + "\n"
+}
+
+func RenderStatusStyled(scenario detector.Scenario, output string, width int) string {
+	return RenderPlannerStatusStyled(scenario, "", scenario.Matched, output, width)
 }
 
 func citationFrom(item evidence.ScoredSource) Citation {
@@ -322,6 +366,38 @@ func cleanQueries(queries []string) []string {
 	return out
 }
 
+func cleanActionPlan(plan []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, step := range plan {
+		step = cleanActionStep(step)
+		if step == "" {
+			continue
+		}
+		key := strings.ToLower(step)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, step)
+	}
+	return out
+}
+
+var actionMarkerRE = regexp.MustCompile(`^\s*(?:[/\\]\s*)?(?:(?:[-*•]\s*)|(?:\d+[\.)、]\s*))+`)
+
+func cleanActionStep(step string) string {
+	step = strings.TrimSpace(step)
+	for {
+		cleaned := strings.TrimSpace(actionMarkerRE.ReplaceAllString(step, ""))
+		if cleaned == step {
+			break
+		}
+		step = cleaned
+	}
+	return strings.TrimSpace(step)
+}
+
 func renderPlan(k KnowledgeCard) string {
 	var lines []string
 	if strings.TrimSpace(k.PlannerReason) != "" {
@@ -352,6 +428,18 @@ func renderBulletList(values []string, width int) string {
 		}
 		wrapped := wrapText(value, width-2)
 		lines = append(lines, "• "+strings.ReplaceAll(wrapped, "\n", "\n  "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderActionPlan(plan []string) string {
+	plan = cleanActionPlan(plan)
+	if len(plan) == 0 {
+		return "1. 打开内部来源核对后再执行修复动作。"
+	}
+	var lines []string
+	for i, step := range plan {
+		lines = append(lines, fmt.Sprintf("%d. %s", i+1, step))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -464,31 +552,25 @@ func renderCitation(c Citation) string {
 func enforceConfidence(card *KnowledgeCard, conf evidence.Confidence, status retrieval.Status, retrievalErr error, evidenceItems []evidence.ScoredSource) {
 	if conf != evidence.ConfidenceHigh {
 		card.LikelyCause = fallbackCause(conf, status, retrievalErr, evidenceItems)
-		card.NextAction = fallbackNextAction(conf, evidenceItems)
 	}
 	if caveat := fallbackCaveat(conf, status, retrievalErr); caveat != "" {
 		card.Caveat = caveat
 	}
 }
 
-func draftGrounded(draft llm.CardDraft, evidenceItems []evidence.ScoredSource) bool {
+func draftTextGrounded(draft llm.CardDraft, evidenceItems []evidence.ScoredSource) bool {
 	evidenceText := evidenceCorpus(evidenceItems)
-	fields := []string{draft.LikelyCause, draft.NextAction, draft.Caveat}
-	checked := false
+	fields := []string{draft.LikelyCause, draft.Caveat}
 	for _, field := range fields {
 		field = strings.TrimSpace(field)
 		if field == "" {
 			continue
 		}
-		checked = true
-		if hasDisallowedDangerousAction(field) {
-			return false
-		}
 		if !fieldGrounded(field, evidenceText) {
 			return false
 		}
 	}
-	return checked
+	return true
 }
 
 func evidenceCorpus(items []evidence.ScoredSource) string {
@@ -590,93 +672,6 @@ func cjkStopSegment(segment string) bool {
 		"可能": true, "原因": true, "建议": true, "下一步": true, "当前": true,
 	}
 	return stop[segment]
-}
-
-func hasDisallowedDangerousAction(field string) bool {
-	lower := normalizeWidthLower(field)
-	compact := strings.NewReplacer(" ", "", "\t", "", "\n", "", "`", "", "'", "", "\"", "").Replace(lower)
-	dangerousPhrases := []string{
-		"rm -rf",
-		"rm -r",
-		"sudo rm",
-		"drop database",
-		"drop db",
-		"drop table",
-		"truncate table",
-		"delete from",
-		"delete database",
-		"delete db",
-		"delete data",
-		"wipe database",
-		"wipe data",
-		"destroy database",
-		"destroy data",
-		"删库",
-		"删数据",
-		"删生产数据",
-		"删除库",
-		"删除生产库",
-		"删除数据库",
-		"删除数据表",
-		"删除数据",
-		"删除生产数据",
-		"清库",
-		"清除库",
-		"清除生产库",
-		"清除数据库",
-		"清除数据表",
-		"清除数据",
-		"清除生产数据",
-		"清理库",
-		"清理生产库",
-		"清理数据库",
-		"清理数据表",
-		"清理数据",
-		"清理生产数据",
-		"清掉库",
-		"清掉生产库",
-		"清掉数据库",
-		"清掉数据表",
-		"清掉数据",
-		"清掉生产数据",
-		"清空库",
-		"清空生产库",
-		"清空数据库",
-		"清空数据表",
-		"清空数据",
-		"清空生产数据",
-		"抹掉库",
-		"抹掉生产库",
-		"抹掉数据库",
-		"抹掉数据表",
-		"抹掉数据",
-		"抹掉生产数据",
-		"移除库",
-		"移除生产库",
-		"移除数据库",
-		"移除数据表",
-		"移除数据",
-		"移除生产数据",
-	}
-	for _, phrase := range dangerousPhrases {
-		if strings.Contains(lower, phrase) || strings.Contains(compact, strings.ReplaceAll(phrase, " ", "")) {
-			return true
-		}
-	}
-
-	destructiveVerbs := []string{"删除", "删", "清除", "清理", "清掉", "清空", "抹掉", "移除", "drop", "truncate", "delete", "wipe", "destroy", "remove"}
-	databaseTargets := []string{"db", "database", "table", "data", "数据库", "生产数据库", "生产库", "数据表", "生产数据", "数据", "表"}
-	for _, verb := range destructiveVerbs {
-		if !strings.Contains(lower, verb) && !strings.Contains(compact, verb) {
-			continue
-		}
-		for _, target := range databaseTargets {
-			if strings.Contains(lower, target) || strings.Contains(compact, target) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func normalizeWidthLower(value string) string {
@@ -855,44 +850,17 @@ func fallbackCause(conf evidence.Confidence, status retrieval.Status, retrievalE
 	return "检索到的内部证据不足以支撑确定结论。"
 }
 
-func fallbackNextAction(conf evidence.Confidence, evidenceItems []evidence.ScoredSource) string {
-	if conf == evidence.ConfidenceHigh {
-		if !looksLikeFeishuEvidence(evidenceItems) {
-			return "按引用来源中的修复步骤处理，并在修复后重新执行失败命令验证。"
+func fallbackActionPlan(conf evidence.Confidence, evidenceItems []evidence.ScoredSource) []string {
+	if conf == evidence.ConfidenceHigh && len(evidenceItems) > 0 {
+		return []string{
+			"按引用来源给出的处理路径执行。",
+			"修复后重新执行失败命令验证结果。",
 		}
-		signals := signalsFromEvidence(evidenceItems)
-		action := "检查飞书开放平台应用权限和授权状态"
-		if signals.docxScope {
-			action = "检查飞书开放平台应用权限，确认 `docx:document:read` 已添加"
-		} else if signals.missingScope {
-			action = "检查飞书开放平台应用权限，确认报错中的所需 scope 已添加"
-		} else if signals.tokenInvalid || signals.accessToken {
-			action = "检查飞书访问 token 是否仍有效，并确认本地身份授权状态"
-		}
-		if signals.publishPermission {
-			action += "并发布权限变更"
-		}
-		if signals.reauthorize {
-			action += "，然后重新授权本地开发身份"
-		}
-		switch {
-		case signals.cleanupOldToken:
-			action += "，必要时清理旧 token 后重试"
-		case signals.refreshToken:
-			action += "，刷新 token 后重试"
-		default:
-			if signals.reauthorize {
-				action += "后重试"
-			} else {
-				action += "，然后重试"
-			}
-		}
-		return action + "。"
 	}
 	if len(evidenceItems) > 0 {
-		return "打开引用来源核对具体修复步骤；证据不足时先不要执行高风险变更。"
+		return []string{"打开引用来源核对具体处理路径；证据不足时先不要执行高风险变更。"}
 	}
-	return "未找到足够内部证据；建议补充知识库或扩大关键词后人工搜索。"
+	return []string{"未找到足够内部证据；补充知识库或扩大关键词后人工搜索。"}
 }
 
 func fallbackCaveat(conf evidence.Confidence, status retrieval.Status, retrievalErr error) string {

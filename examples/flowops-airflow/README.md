@@ -53,7 +53,7 @@ For the contest recording, keep the command prompt visible and show the generate
 
 - detected FlowOps/Airflow DAG import scenario;
 - likely parse-time Variable lookup cause;
-- one next action, such as moving Variable access into task runtime or configuring the missing Variable only as a short-term unblock;
+- an ordered action plan, such as moving Variable access into task runtime, using configuration only as a short-term unblock, and rerunning the failing check;
 - citations to the 星桥科技 FlowOps mock docs.
 
 ## Benchmark

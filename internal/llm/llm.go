@@ -51,9 +51,9 @@ type CardInput struct {
 }
 
 type CardDraft struct {
-	LikelyCause string `json:"likely_cause"`
-	NextAction  string `json:"next_action"`
-	Caveat      string `json:"caveat"`
+	LikelyCause string   `json:"likely_cause"`
+	ActionPlan  []string `json:"action_plan"`
+	Caveat      string   `json:"caveat"`
 }
 
 type OpenAICompatible struct {
@@ -158,8 +158,9 @@ func (p *OpenAICompatible) GenerateCard(ctx context.Context, input CardInput) (C
 		evidenceLines = append(evidenceLines, fmt.Sprintf("- %s: %s", item.Source.CitationLabel(), item.Snippet))
 	}
 	prompt := fmt.Sprintf(`Generate a compact Chinese terminal knowledge card draft.
-Return only JSON with keys likely_cause, next_action, caveat.
-Use only the evidence below. Do not cite or invent sources. If evidence is weak, say so.
+Return only JSON with keys likely_cause, action_plan, caveat.
+action_plan must be an ordered array of concrete steps that can resolve or verify the failure.
+Use the evidence below as the factual context. Do not cite or invent sources. If evidence is weak, say so.
 
 Command: %s
 Scenario: %s
@@ -178,7 +179,7 @@ Evidence:
 	if err := json.Unmarshal([]byte(extractJSONObject(text)), &draft); err != nil {
 		return CardDraft{}, err
 	}
-	if strings.TrimSpace(draft.LikelyCause) == "" && strings.TrimSpace(draft.Caveat) == "" {
+	if strings.TrimSpace(draft.LikelyCause) == "" && strings.TrimSpace(draft.Caveat) == "" && len(draft.ActionPlan) == 0 {
 		return CardDraft{}, errors.New("empty card draft")
 	}
 	return draft, nil

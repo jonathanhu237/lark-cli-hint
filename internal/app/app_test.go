@@ -225,6 +225,16 @@ func TestRunKeepsKnowledgeCardOffStdout(t *testing.T) {
 	if !strings.Contains(stderr.String(), "lark-cue knowledge card") {
 		t.Fatalf("expected cue on stderr, got %q", stderr.String())
 	}
+	planAt := strings.Index(stderr.String(), "lark-cue LLM plan")
+	cardAt := strings.Index(stderr.String(), "lark-cue knowledge card")
+	if planAt < 0 || cardAt < 0 || planAt > cardAt {
+		t.Fatalf("LLM plan should render before final card:\n%s", stderr.String())
+	}
+	for _, want := range []string{"Reason", "DAG import failure mentions billing_daily", "Queries", "- billing_daily billing_region"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing early LLM plan field %q:\n%s", want, stderr.String())
+		}
+	}
 }
 
 func TestRunCapsPlannerQueriesForFeishuSearch(t *testing.T) {
@@ -628,7 +638,7 @@ func (f fakeCueProvider) GenerateCard(ctx context.Context, input llm.CardInput) 
 	if f.cardErr != nil {
 		return llm.CardDraft{}, f.cardErr
 	}
-	if strings.TrimSpace(f.draft.LikelyCause) != "" || strings.TrimSpace(f.draft.Caveat) != "" {
+	if strings.TrimSpace(f.draft.LikelyCause) != "" || strings.TrimSpace(f.draft.Caveat) != "" || len(f.draft.ActionPlan) > 0 {
 		return f.draft, nil
 	}
 	return llm.CardDraft{}, errors.New("empty draft")

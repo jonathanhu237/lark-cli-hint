@@ -99,8 +99,10 @@ FlowOps DAG import error
 Likely Cause
 billing_daily reads billing_region while the DAG is imported, so FlowOps cannot finish DagBag parsing.
 
-Next Action
-Move Variable.get("billing_region") into task runtime, or set billing_region only as a short-term unblock; rerun flowctl check billing_daily.
+Action Plan
+1. Move Variable.get("billing_region") into task runtime.
+2. Set billing_region only as a short-term unblock if the pipeline is blocked.
+3. Rerun flowctl check billing_daily.
 
 Evidence
 - FlowOps DAG Import Error 排障 FAQ

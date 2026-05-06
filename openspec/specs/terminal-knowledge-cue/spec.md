@@ -63,14 +63,14 @@ The system SHALL use `lark-cli` at runtime to search real Feishu Docs/Wiki/Sheet
 - **THEN** the system MUST report that real Feishu retrieval failed and MUST NOT produce a confident card that implies real evidence was found
 
 ### Requirement: Evidence Fetching and Scoring
-The system SHALL fetch or read candidate search results before using them as evidence and SHALL score fetched content for support of the planner scenario, command failure, and actionable next-step guidance.
+The system SHALL fetch or read candidate search results before using them as evidence and SHALL score fetched content for support of the planner scenario, command failure, and actionable troubleshooting context.
 
 #### Scenario: Search result title alone is insufficient
 - **WHEN** a candidate result appears in search results but its content cannot be fetched or read
 - **THEN** the system MUST NOT use that result as a supporting citation for a confident knowledge card
 
 #### Scenario: Strong evidence enables a confident cause
-- **WHEN** fetched evidence snippets support both the planner scenario and a concrete next action
+- **WHEN** fetched evidence snippets support both the planner scenario and relevant troubleshooting context
 - **THEN** the system MAY generate a high-confidence likely cause grounded in that evidence
 
 #### Scenario: Weak evidence produces a low-confidence card
@@ -90,11 +90,11 @@ The system SHALL generate a compact terminal knowledge card using only the wrapp
 
 #### Scenario: Card contains required sections
 - **WHEN** the planner recommends retrieval
-- **THEN** the card MUST include detected scenario, likely cause or evidence status, one recommended next action when supported, evidence sources when available, and confidence or caveat
+- **THEN** the card MUST include detected scenario, likely cause or evidence status, an ordered action plan, evidence sources when available, and confidence or caveat
 
-#### Scenario: Card is evidence grounded
+#### Scenario: Card source claims are evidence grounded
 - **WHEN** the LLM generates a card
-- **THEN** the card MUST NOT cite sources that were not fetched/read and MUST NOT introduce claims unsupported by the provided evidence snippets
+- **THEN** the card MUST NOT cite sources that were not fetched/read and MUST keep likely-cause and caveat claims grounded in the provided evidence snippets
 
 #### Scenario: Weak-evidence card is explicit
 - **WHEN** evidence is weak or absent

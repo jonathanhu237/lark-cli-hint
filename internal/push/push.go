@@ -16,7 +16,18 @@ func Prepare(k card.KnowledgeCard) string {
 		fmt.Fprintf(&b, "**LLM Plan**\n%s\n\n", plan)
 	}
 	fmt.Fprintf(&b, "**可能原因**\n%s\n\n", k.LikelyCause)
-	fmt.Fprintf(&b, "**建议下一步**\n%s\n\n", k.NextAction)
+	b.WriteString("**处理序列**\n")
+	actionPlan := k.ActionPlan
+	if len(actionPlan) == 0 {
+		actionPlan = []string{"打开内部来源核对后再执行修复动作。"}
+	}
+	for i, step := range actionPlan {
+		step = strings.TrimSpace(step)
+		if step != "" {
+			fmt.Fprintf(&b, "%d. %s\n", i+1, step)
+		}
+	}
+	b.WriteString("\n")
 	b.WriteString("**证据来源**\n")
 	if len(k.Citations) == 0 {
 		b.WriteString("- 未找到可支撑结论的内部来源。\n")
