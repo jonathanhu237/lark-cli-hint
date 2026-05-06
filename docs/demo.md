@@ -55,6 +55,29 @@ tenant_access_token invalid or permission denied
 
 `lark-cue` should search Docs/Wiki and IM messages using generated queries, fetch/read candidate sources, filter evidence, and print a compact terminal card.
 
+## Recorded Demo Validation
+
+For a clean recorded demo, isolate evaluation records in a temporary log:
+
+```bash
+export LARK_CUE_EVAL_LOG="$(mktemp -t lark-cue-evaluations.XXXXXX)"
+```
+
+Run the cue flow, then record feedback for the generated card id:
+
+```bash
+./bin/lark-cue run --demo-fixture --no-feedback-prompt -- node examples/failing-feishu-api.js
+./bin/lark-cue feedback <card-id> useful
+```
+
+Then show the validation view:
+
+```bash
+./bin/lark-cue eval report
+```
+
+The report summarizes recent cue records from the local evaluation log: run count, retrieval status, fixture-vs-real usage, citation coverage, query count, latency, and feedback. It is read-only; it does not rerun commands, call `lark-cli`, invoke an LLM, or send Feishu messages.
+
 ## Demo Fixture Recovery
 
 Fixture mode is explicit and labeled:

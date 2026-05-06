@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +38,10 @@ type runOptions struct {
 	verbose          bool
 }
 
+type evalReportOptions struct {
+	limit int
+}
+
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		printHelp(stdout)
@@ -63,6 +68,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 2
 		}
 		return runCommand(context.Background(), cfg, opts, stdin, stdout, stderr)
+	case "eval":
+		return runEval(cfg, args[1:], stdout, stderr)
 	case "feedback":
 		return runFeedback(cfg, args[1:], stdout, stderr)
 	default:
@@ -113,6 +120,30 @@ func parseRunArgs(args []string) (runOptions, error) {
 }
 
 var errHelp = errors.New("help requested")
+
+func parseEvalReportArgs(args []string) (evalReportOptions, error) {
+	opts := evalReportOptions{limit: eval.DefaultReportLimit}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--limit":
+			if i+1 >= len(args) {
+				return opts, errors.New("--limit requires a positive integer")
+			}
+			i++
+			limit, err := strconv.Atoi(args[i])
+			if err != nil || limit <= 0 {
+				return opts, errors.New("--limit requires a positive integer")
+			}
+			opts.limit = limit
+		case "-h", "--help":
+			return opts, errHelp
+		default:
+			return opts, fmt.Errorf("unknown flag %s", arg)
+		}
+	}
+	return opts, nil
+}
 
 func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin io.Reader, stdout, stderr io.Writer) int {
 	signalBuffer := detector.NewSignalBuffer(8192)
@@ -263,6 +294,46 @@ func outputWithSignals(output string, signals string) string {
 	return output + "\n" + signals
 }
 
+func runEval(cfg config.Config, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		printEvalHelp(stdout)
+		return 0
+	}
+	switch args[0] {
+	case "-h", "--help", "help":
+		printEvalHelp(stdout)
+		return 0
+	case "report":
+		opts, err := parseEvalReportArgs(args[1:])
+		if err == errHelp {
+			printEvalReportHelp(stdout)
+			return 0
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "lark-cue eval report: %v\n\n", err)
+			printEvalReportHelp(stderr)
+			return 2
+		}
+		result, err := eval.ReadCueRecords(cfg.Evaluation.LogPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "lark-cue: failed to read evaluation log: %v\n", err)
+			return 1
+		}
+		records := eval.LimitCueRecords(result.Records, opts.limit)
+		summary := eval.Summarize(records, result.MalformedLines, opts.limit)
+		if shouldStyleOutput(stdout) {
+			fmt.Fprint(stdout, eval.RenderSummaryStyled(summary, terminalWidth(stdout)))
+		} else {
+			fmt.Fprint(stdout, eval.RenderSummary(summary))
+		}
+		return 0
+	default:
+		fmt.Fprintf(stderr, "lark-cue eval: unknown command %q\n\n", args[0])
+		printEvalHelp(stderr)
+		return 2
+	}
+}
+
 func runFeedback(cfg config.Config, args []string, stdout, stderr io.Writer) int {
 	if len(args) != 2 {
 		fmt.Fprintln(stderr, "usage: lark-cue feedback <card-id> useful|not-useful")
@@ -335,10 +406,12 @@ func printHelp(w io.Writer) {
 
 Usage:
   lark-cue run [flags] -- <command>
+  lark-cue eval report [flags]
   lark-cue feedback <card-id> useful|not-useful
 
 Commands:
   run       Run a command and show an evidence-backed cue on Feishu API failures
+  eval      Summarize local cue evaluation records
   feedback  Record useful/not-useful feedback for a generated cue
   help      Show this help
   version   Show version`)
@@ -355,4 +428,21 @@ Flags:
   --push-chat <target>  Feishu chat id or chat name for push sending
   --no-feedback-prompt  Do not ask for interactive useful/not-useful feedback
   --verbose             Print LLM/retrieval diagnostics without secrets`)
+}
+
+func printEvalHelp(w io.Writer) {
+	fmt.Fprintln(w, `Usage:
+  lark-cue eval report [flags]
+
+Commands:
+  report  Summarize local cue evaluation records`)
+}
+
+func printEvalReportHelp(w io.Writer) {
+	fmt.Fprintf(w, `Usage:
+  lark-cue eval report [flags]
+
+Flags:
+  --limit <N>  Summarize the latest N cue records (default: %d)
+`, eval.DefaultReportLimit)
 }

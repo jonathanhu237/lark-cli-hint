@@ -6,6 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"lark-cue/internal/card"
+	"lark-cue/internal/eval"
+	"lark-cue/internal/retrieval"
 )
 
 func TestRunMissingCommandIsClear(t *testing.T) {
@@ -123,5 +127,70 @@ func TestRunKeepsKnowledgeCardOffStdout(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "lark-cue knowledge card") {
 		t.Fatalf("expected cue on stderr, got %q", stderr.String())
+	}
+}
+
+func TestEvalReportReadsLogAndWritesStdoutOnly(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	logPath := filepath.Join(t.TempDir(), "eval.jsonl")
+	t.Setenv("LARK_CUE_EVAL_LOG", logPath)
+	if err := eval.Append(logPath, eval.FromCard(card.KnowledgeCard{
+		ID:              "cue_test",
+		Command:         "node x.js",
+		Scenario:        "scenario",
+		RetrievalStatus: retrieval.StatusOK,
+		Citations: []card.Citation{{
+			Type:  "doc",
+			Title: "Guide",
+		}},
+		LatencyMS:  1200,
+		QueryCount: 3,
+		Feedback:   "skipped",
+	})); err != nil {
+		t.Fatalf("Append error: %v", err)
+	}
+	if err := eval.AppendFeedback(logPath, "cue_test", "useful"); err != nil {
+		t.Fatalf("AppendFeedback error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"eval", "report", "--limit", "10"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	for _, want := range []string{"lark-cue validation report", "cue runs: 1", "ok 1", "citation coverage: 1/1", "useful: 1"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "\x1b[") {
+		t.Fatalf("non-TTY report output included ANSI: %q", stdout.String())
+	}
+}
+
+func TestEvalReportEmptyLogAndInvalidLimit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("LARK_CUE_EVAL_LOG", filepath.Join(t.TempDir(), "missing.jsonl"))
+
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"eval", "report"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "No cue records found") {
+		t.Fatalf("empty report missing message:\n%s", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Main([]string{"eval", "report", "--limit", "0"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "--limit requires a positive integer") {
+		t.Fatalf("stderr missing limit error:\n%s", stderr.String())
 	}
 }
