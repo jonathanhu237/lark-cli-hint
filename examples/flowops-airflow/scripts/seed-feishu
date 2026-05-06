@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.11+ is expected.
+    tomllib = None
+
+
+DEFAULT_MANIFEST = Path(__file__).resolve().parents[1] / "seed" / "wiki" / "manifest.json"
+
+
+class SeedError(Exception):
+    pass
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        manifest_path = Path(args.manifest).expanduser().resolve()
+        manifest = load_manifest(manifest_path)
+        config = load_seed_config()
+        profile = first_non_empty(args.profile, config.get("feishu_profile", ""))
+        wiki_name = first_non_empty(args.wiki_name, config.get("wiki_name", ""), manifest["wiki_name"])
+
+        if args.apply and not profile:
+            raise SeedError("--apply requires a seed Feishu profile from --profile or ~/.lark-cue/config.toml [seed].feishu_profile")
+        if wiki_name == "my_library":
+            raise SeedError("wiki_name must be a team Wiki name; my_library is a personal document library")
+
+        if args.apply:
+            require_lark_cli()
+            apply_manifest(args, manifest, manifest_path.parent, profile, wiki_name)
+        else:
+            dry_run(args, manifest, manifest_path.parent, profile, wiki_name)
+        return 0
+    except SeedError as err:
+        print(str(err), file=sys.stderr)
+        return 2
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Seed the FlowOps demo team Wiki through lark-cli.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Writes are disabled unless --apply is set. Apply mode requires a seed/test "
+            "profile from --profile or ~/.lark-cue/config.toml [seed].feishu_profile."
+        ),
+    )
+    parser.add_argument("--apply", action="store_true", help="Create or update the FlowOps demo team Wiki.")
+    parser.add_argument("--profile", help="Seed/test lark-cli profile. Overrides [seed].feishu_profile.")
+    parser.add_argument("--wiki-name", help="Team Wiki name. Overrides [seed].wiki_name and manifest wiki_name.")
+    parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST), help="Path to the FlowOps Wiki seed manifest.")
+    parser.add_argument("--as", dest="identity", choices=("user", "bot"), default="user", help="Identity for Feishu writes. Default: user.")
+    return parser.parse_args()
+
+
+def load_seed_config() -> dict:
+    config_path = Path.home() / ".lark-cue" / "config.toml"
+    if not config_path.exists():
+        return {}
+    if tomllib is None:
+        return load_seed_config_fallback(config_path)
+    try:
+        with config_path.open("rb") as fh:
+            data = tomllib.load(fh)
+    except tomllib.TOMLDecodeError as err:
+        raise SeedError(f"invalid TOML in {config_path}: {err}") from err
+    seed = data.get("seed", {})
+    if not isinstance(seed, dict):
+        return {}
+    return {
+        "feishu_profile": str(seed.get("feishu_profile", "")).strip(),
+        "wiki_name": str(seed.get("wiki_name", "")).strip(),
+    }
+
+
+def load_seed_config_fallback(config_path: Path) -> dict:
+    section = ""
+    values = {}
+    for raw in config_path.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip()
+            continue
+        if section != "seed" or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"')
+    return {
+        "feishu_profile": values.get("feishu_profile", "").strip(),
+        "wiki_name": values.get("wiki_name", "").strip(),
+    }
+
+
+def load_manifest(path: Path) -> dict:
+    if not path.exists():
+        raise SeedError(f"manifest not found: {path}")
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as err:
+        raise SeedError(f"invalid manifest JSON: {err}") from err
+    if not isinstance(manifest, dict):
+        raise SeedError("manifest root must be a JSON object")
+    wiki_name = str(manifest.get("wiki_name", "")).strip()
+    if not wiki_name:
+        raise SeedError("manifest wiki_name is required")
+    pages = manifest.get("pages")
+    if not isinstance(pages, list) or not pages:
+        raise SeedError("manifest pages must be a non-empty array")
+    validate_pages(pages, path.parent)
+    smoke_queries = manifest.get("smoke_queries", [])
+    if not isinstance(smoke_queries, list):
+        raise SeedError("manifest smoke_queries must be an array when present")
+    manifest["wiki_name"] = wiki_name
+    manifest["description"] = str(manifest.get("description", "")).strip()
+    manifest["smoke_queries"] = [str(query).strip() for query in smoke_queries if str(query).strip()]
+    return manifest
+
+
+def validate_pages(pages: list, base_dir: Path) -> None:
+    seen_paths = set()
+
+    def walk(items: list, path: tuple[str, ...]) -> None:
+        titles = set()
+        for item in items:
+            if not isinstance(item, dict):
+                raise SeedError("manifest page entries must be objects")
+            title = str(item.get("title", "")).strip()
+            filename = str(item.get("file", "")).strip()
+            if not title:
+                raise SeedError("manifest page title is required")
+            if title in titles:
+                raise SeedError(f"duplicate page title under {' / '.join(path) or 'Wiki root'}: {title}")
+            if "[lark-cue-demo]" in title or "seed" in title.lower():
+                raise SeedError(f"page title exposes demo/seed marker: {title}")
+            titles.add(title)
+            if not filename:
+                raise SeedError(f"manifest page file is required for {title}")
+            page_path = (base_dir / filename).resolve()
+            if page_path in seen_paths:
+                raise SeedError(f"manifest file is referenced more than once: {filename}")
+            seen_paths.add(page_path)
+            if not page_path.exists():
+                raise SeedError(f"manifest page file not found: {filename}")
+            content = page_path.read_text(encoding="utf-8")
+            if "[lark-cue-demo]" in content or "seed-managed" in content.lower():
+                raise SeedError(f"page content exposes demo/seed marker: {filename}")
+            children = item.get("children", [])
+            if children is None:
+                children = []
+            if not isinstance(children, list):
+                raise SeedError(f"children must be an array for {title}")
+            walk(children, path + (title,))
+
+    walk(pages, ())
+
+
+def first_non_empty(*values: str) -> str:
+    for value in values:
+        value = str(value or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def dry_run(args: argparse.Namespace, manifest: dict, base_dir: Path, profile: str, wiki_name: str) -> None:
+    display_profile = profile or "<seed-profile required for --apply>"
+    print("FlowOps Feishu demo seed")
+    print("Mode: dry-run. No Feishu writes will be performed.")
+    print(f"Profile: {display_profile}")
+    print(f"Wiki: {wiki_name}")
+    print()
+    print("[dry-run] would find or create team Wiki:")
+    print_command(profile, ["wiki", "spaces", "list", "--params", '{"page_size":50}', "--format", "json", "--as", args.identity])
+    print_command(profile, ["wiki", "spaces", "create", "--data", json.dumps(space_payload(wiki_name, manifest), ensure_ascii=False), "--yes", "--format", "json", "--as", args.identity])
+    print()
+    print("[dry-run] would create, update, or move managed pages:")
+    for page_path, page in flatten_pages(manifest["pages"]):
+        filename = page["file"]
+        print(f"- {' / '.join(page_path)} <- {base_dir / filename}")
+    print()
+    print_smoke_commands(profile, manifest)
+
+
+def apply_manifest(args: argparse.Namespace, manifest: dict, base_dir: Path, profile: str, wiki_name: str) -> None:
+    print("FlowOps Feishu demo seed")
+    print("Mode: apply. Lark docs may be created, updated, or moved in the target team Wiki.")
+    print(f"Profile: {profile}")
+    print(f"Wiki: {wiki_name}")
+    print()
+
+    client = LarkClient(profile=profile, identity=args.identity)
+    space = find_or_create_space(client, wiki_name, manifest)
+    space_id = str(space.get("space_id", "")).strip()
+    if not space_id:
+        raise SeedError("target Wiki space did not include space_id")
+    if str(space.get("space_type", "")).lower() in {"person", "my_library"}:
+        raise SeedError(f"target Wiki is not a team space: {wiki_name}")
+    print(f"Using Wiki: {wiki_name} ({space_id})")
+
+    for page in manifest["pages"]:
+        apply_page(client, space_id, base_dir, page, parent_token="", path=())
+
+    print()
+    print_smoke_commands(profile, manifest)
+
+
+def space_payload(wiki_name: str, manifest: dict) -> dict:
+    return {
+        "name": wiki_name,
+        "description": manifest.get("description", ""),
+        "open_sharing": "closed",
+    }
+
+
+def find_or_create_space(client: "LarkClient", wiki_name: str, manifest: dict) -> dict:
+    for attempt in range(4):
+        matches = []
+        for space in client.list_spaces():
+            if str(space.get("name", "")).strip() == wiki_name:
+                matches.append(space)
+        if len(matches) > 1:
+            ids = ", ".join(str(space.get("space_id", "")) for space in matches)
+            raise SeedError(f"multiple Wiki spaces named {wiki_name}; refusing ambiguous seed target: {ids}")
+        if matches:
+            space = matches[0]
+            if str(space.get("space_type", "")).lower() in {"person", "my_library"}:
+                raise SeedError(f"Wiki name {wiki_name} resolves to a personal library, not a team Wiki")
+            print(f"[apply] reuse Wiki: {wiki_name} ({space.get('space_id')})")
+            return space
+        if attempt < 3:
+            time.sleep(2)
+    print(f"[apply] create Wiki: {wiki_name}")
+    return client.create_space(space_payload(wiki_name, manifest))
+
+
+def apply_page(client: "LarkClient", space_id: str, base_dir: Path, page: dict, parent_token: str, path: tuple[str, ...]) -> dict:
+    title = page["title"]
+    full_path = path + (title,)
+    markdown = (base_dir / page["file"]).read_text(encoding="utf-8")
+    node = find_existing_page(client, space_id, title, parent_token)
+    if node is None:
+        print(f"[apply] create page: {' / '.join(full_path)}")
+        node = client.create_doc(space_id, parent_token, title, markdown)
+    else:
+        if str(node.get("parent_node_token", "")) != parent_token:
+            print(f"[apply] move page: {' / '.join(full_path)}")
+            client.move_node(space_id, str(node["node_token"]), parent_token)
+            node["parent_node_token"] = parent_token
+        print(f"[apply] update page: {' / '.join(full_path)}")
+        client.update_doc(str(node["obj_token"]), title, markdown)
+    refreshed = client.get_node_by_doc(str(node["obj_token"]))
+    for child in page.get("children", []) or []:
+        apply_page(client, space_id, base_dir, child, parent_token=str(refreshed["node_token"]), path=full_path)
+    return refreshed
+
+
+def find_existing_page(client: "LarkClient", space_id: str, title: str, parent_token: str) -> dict | None:
+    nodes = client.list_all_nodes(space_id)
+    exact = [node for node in nodes if node_title(node) == title and str(node.get("parent_node_token", "")) == parent_token]
+    if len(exact) > 1:
+        raise SeedError(f"multiple pages named {title} under the same parent; refusing ambiguous update")
+    if exact:
+        return exact[0]
+
+    legacy_title = "[lark-cue-demo] " + title
+    candidates = [node for node in nodes if node_title(node) in {title, legacy_title}]
+    if len(candidates) > 1:
+        locations = ", ".join(str(node.get("node_token", "")) for node in candidates)
+        raise SeedError(f"multiple pages named {title} exist in target Wiki; refusing ambiguous move/update: {locations}")
+    if candidates:
+        return candidates[0]
+    return None
+
+
+def node_title(node: dict) -> str:
+    return str(node.get("title", "")).strip()
+
+
+def flatten_pages(pages: list, path: tuple[str, ...] = ()):
+    for page in pages:
+        page_path = path + (page["title"],)
+        yield page_path, page
+        yield from flatten_pages(page.get("children", []) or [], page_path)
+
+
+def print_smoke_commands(profile: str, manifest: dict) -> None:
+    print("Smoke search commands:")
+    display_profile = profile or "<seed-profile>"
+    for query in manifest.get("smoke_queries", []):
+        cmd = ["lark-cli", "--profile", display_profile, "docs", "+search", "--query", query, "--page-size", "10", "--format", "pretty"]
+        print("  " + shlex.join(cmd))
+
+
+def print_command(profile: str, args: list[str]) -> None:
+    display_profile = profile or "<seed-profile>"
+    print("  " + shlex.join(["lark-cli", "--profile", display_profile] + args))
+
+
+def require_lark_cli() -> None:
+    if shutil.which("lark-cli") is None:
+        raise SeedError("lark-cli is required. Install and authenticate it before applying the seed.")
+
+
+class LarkClient:
+    def __init__(self, profile: str, identity: str) -> None:
+        self.profile = profile
+        self.identity = identity
+
+    def run_json(self, args: list[str], stdin: str | None = None) -> dict:
+        cmd = ["lark-cli", "--profile", self.profile] + args
+        proc = subprocess.run(cmd, input=stdin, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if proc.returncode != 0:
+            detail = proc.stderr.strip() or proc.stdout.strip()
+            raise SeedError(f"lark-cli command failed: {shlex.join(cmd)}\n{detail}")
+        try:
+            data = json.loads(proc.stdout)
+        except json.JSONDecodeError as err:
+            raise SeedError(f"lark-cli returned non-JSON output for {shlex.join(cmd)}:\n{proc.stdout}") from err
+        if data.get("ok") is False:
+            error = data.get("error") or {}
+            message = error.get("message") if isinstance(error, dict) else str(error)
+            raise SeedError(f"lark-cli returned ok=false for {shlex.join(cmd)}: {message}")
+        if "code" in data and str(data.get("code")) not in {"0", ""}:
+            raise SeedError(f"lark-cli returned code={data.get('code')} for {shlex.join(cmd)}: {data.get('msg', '')}")
+        return data
+
+    def list_spaces(self) -> list[dict]:
+        items = []
+        params = {"page_size": 50}
+        while True:
+            data = self.run_json(["wiki", "spaces", "list", "--params", json.dumps(params, ensure_ascii=False), "--format", "json", "--as", self.identity])
+            body = data.get("data", {})
+            items.extend(body.get("items") or [])
+            if not body.get("has_more"):
+                return items
+            token = body.get("page_token")
+            if not token:
+                return items
+            params["page_token"] = token
+
+    def create_space(self, payload: dict) -> dict:
+        data = self.run_json(["wiki", "spaces", "create", "--data", json.dumps(payload, ensure_ascii=False), "--yes", "--format", "json", "--as", self.identity])
+        space = data.get("data", {}).get("space", {})
+        if not space:
+            raise SeedError("wiki spaces create did not return a space")
+        return space
+
+    def list_children(self, space_id: str, parent_token: str) -> list[dict]:
+        items = []
+        params = {"space_id": space_id, "page_size": 50}
+        if parent_token:
+            params["parent_node_token"] = parent_token
+        while True:
+            data = self.run_json(["wiki", "nodes", "list", "--params", json.dumps(params, ensure_ascii=False), "--format", "json", "--as", self.identity])
+            body = data.get("data", {})
+            items.extend(body.get("items") or [])
+            if not body.get("has_more"):
+                return items
+            token = body.get("page_token")
+            if not token:
+                return items
+            params["page_token"] = token
+
+    def list_all_nodes(self, space_id: str) -> list[dict]:
+        all_nodes = []
+
+        def walk(parent_token: str) -> None:
+            for node in self.list_children(space_id, parent_token):
+                all_nodes.append(node)
+                if node.get("has_child"):
+                    walk(str(node.get("node_token", "")))
+
+        walk("")
+        return all_nodes
+
+    def create_doc(self, space_id: str, parent_token: str, title: str, markdown: str) -> dict:
+        args = ["docs", "+create", "--title", title, "--markdown", "-", "--as", self.identity]
+        if parent_token:
+            args.extend(["--wiki-node", parent_token])
+        else:
+            args.extend(["--wiki-space", space_id])
+        data = self.run_json(args, stdin=markdown)
+        doc_id = first_non_empty(
+            data.get("data", {}).get("doc_id", ""),
+            data.get("data", {}).get("obj_token", ""),
+            data.get("data", {}).get("token", ""),
+        )
+        if not doc_id:
+            raise SeedError(f"docs +create did not return a doc token for {title}")
+        return self.get_node_by_doc(doc_id)
+
+    def update_doc(self, doc_token: str, title: str, markdown: str) -> None:
+        self.run_json(["docs", "+update", "--doc", doc_token, "--mode", "overwrite", "--new-title", title, "--markdown", "-", "--as", self.identity], stdin=markdown)
+
+    def get_node_by_doc(self, doc_token: str) -> dict:
+        params = {"token": doc_token, "obj_type": "docx"}
+        data = self.run_json(["wiki", "spaces", "get_node", "--params", json.dumps(params, ensure_ascii=False), "--format", "json", "--as", self.identity])
+        node = data.get("data", {}).get("node", {})
+        if not node:
+            raise SeedError(f"wiki get_node did not return a node for doc {doc_token}")
+        return node
+
+    def move_node(self, space_id: str, node_token: str, parent_token: str) -> None:
+        args = ["wiki", "+move", "--node-token", node_token, "--target-space-id", space_id, "--as", self.identity]
+        if parent_token:
+            args.extend(["--target-parent-token", parent_token])
+        self.run_json(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

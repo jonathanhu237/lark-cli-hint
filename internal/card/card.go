@@ -23,6 +23,7 @@ type Input struct {
 	Command         []string
 	Output          string
 	Scenario        detector.Scenario
+	PlannerReason   string
 	Queries         []string
 	Evidence        []evidence.ScoredSource
 	Confidence      evidence.Confidence
@@ -42,6 +43,8 @@ type KnowledgeCard struct {
 	ID              string
 	Command         string
 	Scenario        string
+	PlannerReason   string
+	Queries         []string
 	LikelyCause     string
 	NextAction      string
 	Caveat          string
@@ -66,16 +69,22 @@ type Citation struct {
 	Summary   string `json:"summary,omitempty"`
 }
 
+func (k KnowledgeCard) LLMPlan() string {
+	return renderPlan(k)
+}
+
 func Build(ctx context.Context, input Input) KnowledgeCard {
 	card := KnowledgeCard{
 		ID:              newID(),
 		Command:         runner.CommandString(input.Command),
 		Scenario:        scenarioLabel(input.Scenario),
+		PlannerReason:   strings.TrimSpace(input.PlannerReason),
+		Queries:         cleanQueries(input.Queries),
 		Confidence:      input.Confidence,
 		RetrievalStatus: input.RetrievalStatus,
-		QueryCount:      len(input.Queries),
 		CreatedAt:       time.Now(),
 	}
+	card.QueryCount = len(card.Queries)
 	if input.RetrievalError != nil {
 		card.RetrievalError = input.RetrievalError.Error()
 	}
@@ -130,6 +139,10 @@ func Render(k KnowledgeCard) string {
 	fmt.Fprintf(&b, "lark-cue knowledge card [%s]\n", k.ID)
 	b.WriteString("Scenario\n")
 	b.WriteString(k.Scenario + "\n\n")
+	if plan := renderPlan(k); plan != "" {
+		b.WriteString("LLM Plan\n")
+		b.WriteString(plan + "\n\n")
+	}
 	b.WriteString("Likely Cause\n")
 	b.WriteString(valueOr(k.LikelyCause, "未找到足够证据判断具体原因。") + "\n\n")
 	b.WriteString("Next Action\n")
@@ -199,6 +212,9 @@ func RenderStyled(k KnowledgeCard, width int) string {
 	var sections []string
 	sections = append(sections, strings.Join(headerParts, "  "))
 	sections = append(sections, renderStyledKV(label, body, "Scenario", k.Scenario, contentWidth))
+	if plan := renderPlan(k); plan != "" {
+		sections = append(sections, renderStyledKV(label, body, "LLM Plan", plan, contentWidth))
+	}
 	sections = append(sections, renderStyledKV(label, body, "Likely cause", valueOr(k.LikelyCause, "未找到足够证据判断具体原因。"), contentWidth))
 	sections = append(sections, renderStyledKV(label, body, "Next action", valueOr(k.NextAction, "打开内部来源核对后再执行修复动作。"), contentWidth))
 
@@ -290,6 +306,37 @@ func scenarioLabel(scenario detector.Scenario) string {
 		return strings.TrimSpace(scenario.ID)
 	}
 	return "Internal knowledge cue"
+}
+
+func cleanQueries(queries []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, query := range queries {
+		query = strings.TrimSpace(query)
+		if query == "" || seen[query] {
+			continue
+		}
+		seen[query] = true
+		out = append(out, query)
+	}
+	return out
+}
+
+func renderPlan(k KnowledgeCard) string {
+	var lines []string
+	if strings.TrimSpace(k.PlannerReason) != "" {
+		lines = append(lines, "Reason: "+strings.TrimSpace(k.PlannerReason))
+	}
+	if len(k.Queries) > 0 {
+		lines = append(lines, "Queries:")
+		for _, query := range k.Queries {
+			query = strings.TrimSpace(query)
+			if query != "" {
+				lines = append(lines, "- "+query)
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderStyledKV(labelStyle, bodyStyle lipgloss.Style, key, value string, width int) string {

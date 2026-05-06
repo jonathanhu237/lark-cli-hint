@@ -44,6 +44,20 @@ func TestRetrieveSearchesDocsAndIMForEachQuery(t *testing.T) {
 	}
 }
 
+func TestRetrieveDeduplicatesDocsByTokenBeforeURL(t *testing.T) {
+	retriever := NewLarkRetriever(duplicateDocRunner{})
+	sources, status, err := retriever.Retrieve(context.Background(), []string{"FlowOps DAG", "billing_daily"})
+	if err != nil {
+		t.Fatalf("Retrieve error: %v", err)
+	}
+	if status != StatusOK {
+		t.Fatalf("status = %s, want ok", status)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("sources = %+v, want one deduplicated doc", sources)
+	}
+}
+
 type fakeJSONRunner struct {
 	failPrefixes [][]string
 }
@@ -94,6 +108,50 @@ func (r *recordingJSONRunner) RunJSON(ctx context.Context, args ...string) (map[
 	}
 	if len(args) >= 4 && args[0] == "im" && args[1] == "+messages-search" {
 		r.calls = append(r.calls, "im:"+args[3])
+		return map[string]any{"ok": true, "data": map[string]any{"messages": []any{}}}, nil
+	}
+	return map[string]any{"ok": true, "data": map[string]any{}}, nil
+}
+
+type duplicateDocRunner struct{}
+
+func (duplicateDocRunner) RunJSON(ctx context.Context, args ...string) (map[string]any, error) {
+	if len(args) >= 2 && args[0] == "docs" && args[1] == "+search" {
+		return map[string]any{
+			"ok": true,
+			"data": map[string]any{
+				"results": []any{
+					map[string]any{
+						"title_highlighted": "FlowOps FAQ",
+						"result_meta": map[string]any{
+							"token":     "doc_same",
+							"url":       "https://example.test/doc/doc_same",
+							"doc_types": "DOCX",
+						},
+					},
+					map[string]any{
+						"title_highlighted": "FlowOps FAQ",
+						"result_meta": map[string]any{
+							"token":     "doc_same",
+							"url":       "https://example.test/doc/doc_same#anchor",
+							"doc_types": "DOCX",
+						},
+					},
+				},
+			},
+		}, nil
+	}
+	if len(args) >= 2 && args[0] == "docs" && args[1] == "+fetch" {
+		return map[string]any{
+			"ok": true,
+			"data": map[string]any{
+				"doc_id":   "doc_same",
+				"title":    "FlowOps FAQ",
+				"markdown": "DAG import error billing_daily Variable.get billing_region 推荐处理",
+			},
+		}, nil
+	}
+	if len(args) >= 2 && args[0] == "im" && args[1] == "+messages-search" {
 		return map[string]any{"ok": true, "data": map[string]any{"messages": []any{}}}, nil
 	}
 	return map[string]any{"ok": true, "data": map[string]any{}}, nil

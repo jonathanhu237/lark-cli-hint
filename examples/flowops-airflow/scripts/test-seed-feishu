@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT="${ROOT}/scripts/seed-feishu"
+TMP_DIR="$(mktemp -d)"
+cleanup() {
+  rm -rf "${TMP_DIR}"
+}
+trap cleanup EXIT
+
+assert_contains() {
+  local file="$1"
+  local needle="$2"
+  if ! grep -Fq -- "${needle}" "${file}"; then
+    echo "expected ${file} to contain: ${needle}" >&2
+    echo "--- ${file} ---" >&2
+    cat "${file}" >&2
+    exit 1
+  fi
+}
+
+assert_not_contains() {
+  local file="$1"
+  local needle="$2"
+  if grep -Fq -- "${needle}" "${file}"; then
+    echo "expected ${file} not to contain: ${needle}" >&2
+    echo "--- ${file} ---" >&2
+    cat "${file}" >&2
+    exit 1
+  fi
+}
+
+DRY_HOME="${TMP_DIR}/dry-home"
+mkdir -p "${DRY_HOME}"
+HOME="${DRY_HOME}" "${SCRIPT}" >"${TMP_DIR}/dry-run.out"
+assert_contains "${TMP_DIR}/dry-run.out" "Mode: dry-run. No Feishu writes will be performed."
+assert_contains "${TMP_DIR}/dry-run.out" "Profile: <seed-profile required for --apply>"
+assert_contains "${TMP_DIR}/dry-run.out" "Wiki: 星桥科技 FlowOps 知识库"
+assert_contains "${TMP_DIR}/dry-run.out" "FlowOps 调度平台 / DAG 发布与巡检 / FlowOps DAG Import Error 排障 FAQ"
+assert_not_contains "${TMP_DIR}/dry-run.out" "[lark-cue-demo]"
+
+EMPTY_HOME="${TMP_DIR}/empty-home"
+mkdir -p "${EMPTY_HOME}"
+if HOME="${EMPTY_HOME}" "${SCRIPT}" --apply >"${TMP_DIR}/missing-profile.out" 2>&1; then
+  echo "expected --apply without seed profile to fail" >&2
+  exit 1
+fi
+assert_contains "${TMP_DIR}/missing-profile.out" "--apply requires a seed Feishu profile"
+
+CONFIG_HOME="${TMP_DIR}/config-home"
+mkdir -p "${CONFIG_HOME}/.lark-cue"
+cat >"${CONFIG_HOME}/.lark-cue/config.toml" <<'TOML'
+[seed]
+feishu_profile = "flowops-demo"
+wiki_name = "自定义 FlowOps 知识库"
+TOML
+HOME="${CONFIG_HOME}" "${SCRIPT}" >"${TMP_DIR}/config-dry-run.out"
+assert_contains "${TMP_DIR}/config-dry-run.out" "Profile: flowops-demo"
+assert_contains "${TMP_DIR}/config-dry-run.out" "Wiki: 自定义 FlowOps 知识库"
+
+FAKE_BIN="${TMP_DIR}/fake-bin"
+mkdir -p "${FAKE_BIN}"
+cat >"${FAKE_BIN}/lark-cli" <<'PY'
+#!/usr/bin/env python3
+import json
+import os
+import shlex
+import sys
+
+args = sys.argv[1:]
+if len(args) >= 2 and args[0] == "--profile":
+    args = args[2:]
+
+log_path = os.environ["FAKE_LARK_LOG"]
+with open(log_path, "a", encoding="utf-8") as fh:
+    fh.write(shlex.join(args) + "\n")
+
+def arg_value(flag):
+    try:
+        return args[args.index(flag) + 1]
+    except ValueError:
+        return ""
+
+def out(value):
+    print(json.dumps(value, ensure_ascii=False))
+
+space = {
+    "name": "自定义 FlowOps 知识库",
+    "space_id": "space_demo",
+    "space_type": "team",
+    "visibility": "public",
+}
+
+nodes_by_parent = {
+    "": [
+        {"title": "FlowOps 调度平台", "node_token": "node_root", "obj_token": "doc_root", "obj_type": "docx", "parent_node_token": "", "space_id": "space_demo", "has_child": True},
+        {"title": "FlowOps DAG Import Error 排障 FAQ", "node_token": "node_faq", "obj_token": "doc_faq", "obj_type": "docx", "parent_node_token": "", "space_id": "space_demo", "has_child": False},
+    ],
+    "node_root": [
+        {"title": "DAG 发布与巡检", "node_token": "node_dag", "obj_token": "doc_dag", "obj_type": "docx", "parent_node_token": "node_root", "space_id": "space_demo", "has_child": True},
+        {"title": "历史故障复盘", "node_token": "node_history", "obj_token": "doc_history", "obj_type": "docx", "parent_node_token": "node_root", "space_id": "space_demo", "has_child": True},
+    ],
+    "node_dag": [],
+    "node_history": [
+        {"title": "billing_daily 历史故障复盘", "node_token": "node_incident", "obj_token": "doc_incident", "obj_type": "docx", "parent_node_token": "node_history", "space_id": "space_demo", "has_child": False},
+    ],
+}
+nodes_by_doc = {}
+for values in nodes_by_parent.values():
+    for node in values:
+        nodes_by_doc[node["obj_token"]] = node
+nodes_by_doc["doc_created"] = {"title": "FlowOps DAG 开发规范", "node_token": "node_standard", "obj_token": "doc_created", "obj_type": "docx", "parent_node_token": "node_dag", "space_id": "space_demo", "has_child": False}
+
+if args[:3] == ["wiki", "spaces", "list"]:
+    out({"code": 0, "data": {"has_more": False, "items": [space], "page_token": ""}, "msg": "success"})
+elif args[:3] == ["wiki", "spaces", "create"]:
+    out({"code": 0, "data": {"space": space}, "msg": "success"})
+elif args[:3] == ["wiki", "nodes", "list"]:
+    params = json.loads(arg_value("--params") or "{}")
+    parent = params.get("parent_node_token", "")
+    out({"code": 0, "data": {"has_more": False, "items": nodes_by_parent.get(parent, []), "page_token": ""}, "msg": "success"})
+elif args[:3] == ["wiki", "spaces", "get_node"]:
+    params = json.loads(arg_value("--params") or "{}")
+    token = params.get("token", "")
+    node = nodes_by_doc.get(token)
+    if node is None:
+        out({"code": 131005, "msg": "not found"})
+        sys.exit(1)
+    out({"code": 0, "data": {"node": node}, "msg": "success"})
+elif args[:2] == ["docs", "+update"]:
+    _ = sys.stdin.read()
+    out({"ok": True, "identity": "user", "data": {"success": True}})
+elif args[:2] == ["docs", "+create"]:
+    _ = sys.stdin.read()
+    out({"ok": True, "identity": "user", "data": {"doc_id": "doc_created"}})
+elif args[:2] == ["wiki", "+move"]:
+    out({"ok": True, "identity": "user", "data": {"ready": True}})
+else:
+    print("unexpected fake lark-cli command: " + shlex.join(args), file=sys.stderr)
+    sys.exit(9)
+PY
+chmod +x "${FAKE_BIN}/lark-cli"
+
+FAKE_HOME="${TMP_DIR}/fake-home"
+mkdir -p "${FAKE_HOME}/.lark-cue"
+cat >"${FAKE_HOME}/.lark-cue/config.toml" <<'TOML'
+[seed]
+feishu_profile = "flowops-demo"
+wiki_name = "自定义 FlowOps 知识库"
+TOML
+FAKE_LARK_LOG="${TMP_DIR}/fake-lark.log" HOME="${FAKE_HOME}" PATH="${FAKE_BIN}:${PATH}" "${SCRIPT}" --apply >"${TMP_DIR}/fake-apply.out"
+assert_contains "${TMP_DIR}/fake-apply.out" "[apply] reuse Wiki: 自定义 FlowOps 知识库 (space_demo)"
+assert_contains "${TMP_DIR}/fake-apply.out" "[apply] move page: FlowOps 调度平台 / DAG 发布与巡检 / FlowOps DAG Import Error 排障 FAQ"
+assert_contains "${TMP_DIR}/fake-lark.log" "wiki +move --node-token node_faq --target-space-id space_demo --as user --target-parent-token node_dag"
+assert_contains "${TMP_DIR}/fake-lark.log" "docs +update --doc doc_faq --mode overwrite --new-title 'FlowOps DAG Import Error 排障 FAQ' --markdown - --as user"
+assert_contains "${TMP_DIR}/fake-lark.log" "docs +create --title 'FlowOps DAG 开发规范' --markdown - --as user --wiki-node node_dag"
+assert_not_contains "${TMP_DIR}/fake-lark.log" "docs +create --title 'FlowOps DAG 开发规范' --markdown - --as user --wiki-space"
+
+echo "seed script tests passed"

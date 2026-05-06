@@ -210,10 +210,13 @@ func TestRenderSummaryEmptyAndPlain(t *testing.T) {
 		FeedbackCounts:    map[string]int{"useful": 1},
 		Limit:             20,
 	})
-	for _, want := range []string{"lark-cue validation report", "cue runs: 1", "ok 1", "unknown 1", "stale 1", "citation coverage: 1/1", "1.5s", "useful: 1"} {
+	for _, want := range []string{"lark-cue validation report", "cue runs: 1", "ok 1", "unknown 1", "stale 1", "citation coverage: 1/1", "1.5s", "avg queries/run: 3.0"} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q:\n%s", want, report)
 		}
+	}
+	if strings.Contains(report, "Feedback") {
+		t.Fatalf("plain report should not show feedback section:\n%s", report)
 	}
 }
 
@@ -239,10 +242,13 @@ func TestRenderSummaryStyledKeepsReportContent(t *testing.T) {
 		FeedbackCounts:    map[string]int{"useful": 1, "skipped": 1},
 		Limit:             20,
 	}, 100)
-	for _, want := range []string{"lark-cue validation", "Runs", "Retrieval", "Evidence", "Feedback", "stale 1"} {
+	for _, want := range []string{"lark-cue validation", "Runs", "Retrieval", "Evidence", "Runtime", "stale 1"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("styled report missing %q:\n%s", want, rendered)
 		}
+	}
+	if strings.Contains(rendered, "Feedback") {
+		t.Fatalf("styled report should not show feedback section:\n%s", rendered)
 	}
 }
 

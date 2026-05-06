@@ -95,6 +95,7 @@ Use should_retrieve=true only when the failure likely depends on enterprise/inte
 Use should_retrieve=false for ordinary local errors such as missing local files, obvious shell usage mistakes, syntax errors, or dependency installation issues that do not need enterprise knowledge.
 
 Queries must be short keyword-style Feishu search phrases, not natural-language questions.
+Keep every query at or below 30 characters because Feishu document search rejects longer query text.
 Prefer exact terms from the command and terminal output: app/CLI name, service/DAG/job name, error code, config key, exception name, command subcommand, and internal platform name if inferred.
 Return 0 queries when should_retrieve is false. Return 3-8 queries when should_retrieve is true.
 Do not invent exact document titles, URLs, chat IDs, or final answers.

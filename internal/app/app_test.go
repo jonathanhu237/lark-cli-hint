@@ -38,6 +38,20 @@ func TestRunRequiresSeparator(t *testing.T) {
 	}
 }
 
+func TestRunHelpWritesStdoutAndSucceeds(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"run", "--help"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code = %d, want 0", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Usage:") || strings.Contains(stdout.String(), "--no-feedback-prompt") {
+		t.Fatalf("unexpected run help:\n%s", stdout.String())
+	}
+}
+
 func TestRunRequiresLLMBeforeExecutingCommand(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	marker := filepath.Join(t.TempDir(), "ran")
@@ -68,7 +82,6 @@ func TestSendPushRequiresExplicitFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Main([]string{
 		"run",
-		"--no-feedback-prompt",
 		"--",
 		"sh", "-c", "echo 'FlowOps DAG import error billing_daily billing_region Variable.get' >&2; exit 1",
 	}, strings.NewReader(""), &stdout, &stderr)
@@ -83,7 +96,7 @@ func TestSendPushRequiresExplicitFlag(t *testing.T) {
 	}
 }
 
-func TestRunWithDevNullDoesNotPromptForFeedback(t *testing.T) {
+func TestRunDoesNotPromptForFeedback(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("LARK_CUE_EVAL_LOG", filepath.Join(t.TempDir(), "eval.jsonl"))
 	installRunFakes(t, fakeCueProvider{
@@ -200,7 +213,6 @@ func TestRunKeepsKnowledgeCardOffStdout(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Main([]string{
 		"run",
-		"--no-feedback-prompt",
 		"--",
 		"sh", "-c", "echo command-output; echo 'FlowOps DAG import error billing_daily billing_region Variable.get' >&2; exit 1",
 	}, strings.NewReader(""), &stdout, &stderr)
@@ -215,6 +227,42 @@ func TestRunKeepsKnowledgeCardOffStdout(t *testing.T) {
 	}
 }
 
+func TestRunCapsPlannerQueriesForFeishuSearch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("LARK_CUE_EVAL_LOG", filepath.Join(t.TempDir(), "eval.jsonl"))
+	retriever := &capturingRetriever{sources: flowOpsSources(), status: retrieval.StatusOK}
+	installRunFakes(t, fakeCueProvider{
+		decision: llm.PlanDecision{
+			ShouldRetrieve: true,
+			Scenario:       "FlowOps DAG import error",
+			Reason:         "planner returned long keyword query",
+			Queries: []string{
+				"FlowOps DAG import error billing_daily Variable.get billing_region parse time",
+				"billing_daily",
+			},
+		},
+		cardErr: errors.New("use fallback"),
+	}, retriever)
+
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{
+		"run",
+		"--",
+		"sh", "-c", "echo 'FlowOps DAG import error billing_daily billing_region Variable.get' >&2; exit 1",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("code = %d, want wrapped command exit 1", code)
+	}
+	if len(retriever.queries) != 2 {
+		t.Fatalf("retriever queries = %#v, want 2", retriever.queries)
+	}
+	for _, query := range retriever.queries {
+		if len([]rune(query)) > 30 {
+			t.Fatalf("query exceeded Feishu search limit: %q", query)
+		}
+	}
+}
+
 func TestRunPlannerTrueWithNoEvidenceStillRendersLowConfidenceCard(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("LARK_CUE_EVAL_LOG", filepath.Join(t.TempDir(), "eval.jsonl"))
@@ -226,7 +274,6 @@ func TestRunPlannerTrueWithNoEvidenceStillRendersLowConfidenceCard(t *testing.T)
 	var stdout, stderr bytes.Buffer
 	code := Main([]string{
 		"run",
-		"--no-feedback-prompt",
 		"--",
 		"sh", "-c", "echo 'FlowOps DAG import error billing_daily billing_region Variable.get' >&2; exit 1",
 	}, strings.NewReader(""), &stdout, &stderr)
@@ -274,10 +321,13 @@ func TestEvalReportReadsLogAndWritesStdoutOnly(t *testing.T) {
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
-	for _, want := range []string{"lark-cue validation report", "cue runs: 1", "ok 1", "citation coverage: 1/1", "useful: 1"} {
+	for _, want := range []string{"lark-cue validation report", "cue runs: 1", "ok 1", "citation coverage: 1/1", "avg queries/run: 3.0"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
 		}
+	}
+	if strings.Contains(stdout.String(), "Feedback") {
+		t.Fatalf("stdout should not include feedback section:\n%s", stdout.String())
 	}
 	if strings.Contains(stdout.String(), "\x1b[") {
 		t.Fatalf("non-TTY report output included ANSI: %q", stdout.String())
@@ -308,6 +358,233 @@ func TestEvalReportEmptyLogAndInvalidLimit(t *testing.T) {
 	}
 }
 
+func TestBenchmarkRunMissingCasesExitsTwo(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"benchmark", "run"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "--cases is required") {
+		t.Fatalf("stderr missing --cases error:\n%s", stderr.String())
+	}
+}
+
+func TestBenchmarkRunPassesAndKeepsNormalEvalLogClean(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	casesPath := writeBenchmarkCases(t, `{"cases":[{
+		"id":"flowops-dag-import",
+		"command":["sh","-c","echo 'FlowOps DAG import error billing_daily billing_region Variable.get' >&2; exit 1"],
+		"expect_failure":true,
+		"expected_sources":["FlowOps DAG Import Error 排障 FAQ"],
+		"min_expected_hits":1
+	}]}`)
+	installRunFakes(t, fakeCueProvider{
+		decision: flowOpsDecision(),
+		cardErr:  errors.New("use fallback"),
+	}, fakeRetriever{sources: flowOpsSources(), status: retrieval.StatusOK})
+
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"benchmark", "run", "--cases", casesPath}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%s\nstdout=%s", code, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	for _, want := range []string{
+		"lark-cue benchmark report",
+		"cases: 1/1 passed",
+		"expected-source hit rate: 1/1",
+		"PASS flowops-dag-import",
+		"FlowOps DAG Import Error 排障 FAQ",
+		"planner: retrieve",
+		"queries: 3",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	normalLog := filepath.Join(home, ".lark-cue", "evaluations.jsonl")
+	if _, err := os.Stat(normalLog); !os.IsNotExist(err) {
+		t.Fatalf("normal eval log was written; stat err=%v", err)
+	}
+}
+
+func TestBenchmarkRunExecutesSetupAndTeardown(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	setupMarker := filepath.Join(dir, "setup")
+	teardownMarker := filepath.Join(dir, "teardown")
+	casesPath := writeBenchmarkCases(t, `{"cases":[{
+		"id":"setup-teardown",
+		"setup":[["sh","-c","touch '`+setupMarker+`'"]],
+		"command":["sh","-c","test -f '`+setupMarker+`'; echo 'FlowOps DAG import error billing_daily billing_region Variable.get' >&2; exit 1"],
+		"teardown":[["sh","-c","touch '`+teardownMarker+`'"]],
+		"expect_failure":true,
+		"expected_sources":["FlowOps DAG Import Error 排障 FAQ"]
+	}]}`)
+	installRunFakes(t, fakeCueProvider{
+		decision: flowOpsDecision(),
+		cardErr:  errors.New("use fallback"),
+	}, fakeRetriever{sources: flowOpsSources(), status: retrieval.StatusOK})
+
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"benchmark", "run", "--cases", casesPath}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%s\nstdout=%s", code, stderr.String(), stdout.String())
+	}
+	if _, err := os.Stat(teardownMarker); err != nil {
+		t.Fatalf("teardown marker missing: %v", err)
+	}
+}
+
+func TestBenchmarkRunSetsTemporaryEvalLogForAuxCommands(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	normalLog := filepath.Join(t.TempDir(), "normal-eval.jsonl")
+	t.Setenv("LARK_CUE_EVAL_LOG", normalLog)
+	envMarker := filepath.Join(t.TempDir(), "eval-env")
+	casesPath := writeBenchmarkCases(t, `{"cases":[{
+		"id":"aux-env",
+		"setup":[["sh","-c","printf %s \"$LARK_CUE_EVAL_LOG\" > \"$1\"","sh","`+envMarker+`"]],
+		"command":["sh","-c","echo 'FlowOps DAG import error billing_daily billing_region Variable.get' >&2; exit 1"],
+		"expect_failure":true,
+		"expected_sources":["FlowOps DAG Import Error 排障 FAQ"]
+	}]}`)
+	installRunFakes(t, fakeCueProvider{
+		decision: flowOpsDecision(),
+		cardErr:  errors.New("use fallback"),
+	}, fakeRetriever{sources: flowOpsSources(), status: retrieval.StatusOK})
+
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"benchmark", "run", "--cases", casesPath}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%s\nstdout=%s", code, stderr.String(), stdout.String())
+	}
+	data, err := os.ReadFile(envMarker)
+	if err != nil {
+		t.Fatalf("read env marker: %v", err)
+	}
+	seenLog := string(data)
+	if seenLog == normalLog || !strings.Contains(seenLog, "lark-cue-benchmark-") {
+		t.Fatalf("setup saw eval log %q, want benchmark temp log not normal log %q", seenLog, normalLog)
+	}
+	if got := os.Getenv("LARK_CUE_EVAL_LOG"); got != normalLog {
+		t.Fatalf("LARK_CUE_EVAL_LOG after benchmark = %q, want restored %q", got, normalLog)
+	}
+	if _, err := os.Stat(normalLog); !os.IsNotExist(err) {
+		t.Fatalf("normal eval log was written; stat err=%v", err)
+	}
+}
+
+func TestBenchmarkRunEvalLogReadErrorExitsTwo(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	casesPath := writeBenchmarkCases(t, `{"cases":[{
+		"id":"read-error",
+		"command":["sh","-c","echo 'FlowOps DAG import error billing_daily billing_region Variable.get' >&2; exit 1"],
+		"expect_failure":true,
+		"expected_sources":["FlowOps DAG Import Error 排障 FAQ"]
+	}]}`)
+	installRunFakes(t, fakeCueProvider{
+		decision: flowOpsDecision(),
+		cardErr:  errors.New("use fallback"),
+	}, fakeRetriever{sources: flowOpsSources(), status: retrieval.StatusOK})
+	oldReadCueRecords := readCueRecords
+	readCueRecords = func(path string) (eval.ReadResult, error) {
+		return eval.ReadResult{}, errors.New("read failed")
+	}
+	t.Cleanup(func() {
+		readCueRecords = oldReadCueRecords
+	})
+
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"benchmark", "run", "--cases", casesPath}, strings.NewReader(""), &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("code = %d, want 2; stderr=%s\nstdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "failed to read benchmark evaluation log") {
+		t.Fatalf("stderr missing eval read error:\n%s", stderr.String())
+	}
+	if strings.Contains(stdout.String(), "lark-cue benchmark report") {
+		t.Fatalf("runner error rendered case report:\n%s", stdout.String())
+	}
+}
+
+func TestBenchmarkRunRunsAllCasesAndReturnsOneOnCaseFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	marker := filepath.Join(t.TempDir(), "second")
+	casesPath := writeBenchmarkCases(t, `{"cases":[
+		{
+			"id":"pass",
+			"command":["sh","-c","echo 'FlowOps DAG import error billing_daily billing_region Variable.get' >&2; exit 1"],
+			"expect_failure":true,
+			"expected_sources":["FlowOps DAG Import Error 排障 FAQ"]
+		},
+		{
+			"id":"fail",
+			"command":["sh","-c","touch '`+marker+`'; echo 'FlowOps DAG import error billing_daily billing_region Variable.get' >&2; exit 1"],
+			"expect_failure":true,
+			"expected_sources":["Different FAQ"]
+		}
+	]}`)
+	installRunFakes(t, fakeCueProvider{
+		decision: flowOpsDecision(),
+		cardErr:  errors.New("use fallback"),
+	}, fakeRetriever{sources: flowOpsSources(), status: retrieval.StatusOK})
+
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"benchmark", "run", "--cases", casesPath}, strings.NewReader(""), &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1; stderr=%s\nstdout=%s", code, stderr.String(), stdout.String())
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("second case did not run: %v", err)
+	}
+	for _, want := range []string{"PASS pass", "FAIL fail", "expected source hits 0 below minimum 1"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestBenchmarkRunFailsMissingCueAndExpectedFailureMismatch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	casesPath := writeBenchmarkCases(t, `{"cases":[
+		{
+			"id":"missing-cue",
+			"command":["sh","-c","echo 'local failure' >&2; exit 1"],
+			"expect_failure":true,
+			"expected_sources":["FlowOps DAG Import Error 排障 FAQ"]
+		},
+		{
+			"id":"unexpected-success",
+			"command":["sh","-c","exit 0"],
+			"expect_failure":true,
+			"expected_sources":["FlowOps DAG Import Error 排障 FAQ"]
+		}
+	]}`)
+	installRunFakes(t, fakeCueProvider{
+		decision: llm.PlanDecision{
+			ShouldRetrieve: false,
+			Scenario:       "local failure",
+			Reason:         "not an internal knowledge issue",
+		},
+	}, fakeRetriever{sources: flowOpsSources(), status: retrieval.StatusOK})
+
+	var stdout, stderr bytes.Buffer
+	code := Main([]string{"benchmark", "run", "--cases", casesPath}, strings.NewReader(""), &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1; stderr=%s\nstdout=%s", code, stderr.String(), stdout.String())
+	}
+	for _, want := range []string{"FAIL missing-cue", "no scored card was available", "FAIL unexpected-success", "expected command failure but command exited 0"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
 func installRunFakes(t *testing.T, provider fakeCueProvider, retriever retrieval.Retriever) {
 	t.Helper()
 	oldProvider := newPlannerProvider
@@ -322,6 +599,15 @@ func installRunFakes(t *testing.T, provider fakeCueProvider, retriever retrieval
 		newPlannerProvider = oldProvider
 		newRetriever = oldRetriever
 	})
+}
+
+func writeBenchmarkCases(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "cases.json")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile cases: %v", err)
+	}
+	return path
 }
 
 type fakeCueProvider struct {
@@ -365,6 +651,18 @@ type recordingRetriever struct {
 func (r *recordingRetriever) Retrieve(ctx context.Context, queries []string) ([]retrieval.Source, retrieval.Status, error) {
 	r.called = true
 	return nil, retrieval.StatusFailed, errors.New("should not be called")
+}
+
+type capturingRetriever struct {
+	queries []string
+	sources []retrieval.Source
+	status  retrieval.Status
+	err     error
+}
+
+func (r *capturingRetriever) Retrieve(ctx context.Context, queries []string) ([]retrieval.Source, retrieval.Status, error) {
+	r.queries = append([]string(nil), queries...)
+	return r.sources, r.status, r.err
 }
 
 func flowOpsDecision() llm.PlanDecision {

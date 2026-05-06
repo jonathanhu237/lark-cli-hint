@@ -1,18 +1,20 @@
 package app
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/term"
 
+	"lark-cue/internal/benchmark"
 	"lark-cue/internal/card"
 	"lark-cue/internal/config"
 	"lark-cue/internal/detector"
@@ -28,16 +30,20 @@ import (
 const version = "0.1.0"
 
 type runOptions struct {
-	command          []string
-	preparePush      bool
-	sendPush         bool
-	pushChat         string
-	noFeedbackPrompt bool
-	verbose          bool
+	command     []string
+	preparePush bool
+	sendPush    bool
+	pushChat    string
+	verbose     bool
 }
 
 type evalReportOptions struct {
 	limit int
+}
+
+type benchmarkRunOptions struct {
+	casesPath string
+	verbose   bool
 }
 
 type cueProvider interface {
@@ -56,6 +62,8 @@ var newPlannerProvider = func(cfg config.LLMConfig) (cueProvider, error) {
 var newRetriever = func(cfg config.FeishuConfig) retrieval.Retriever {
 	return retrieval.NewLarkRetriever(larkcli.NewWithProfile("lark-cli", cfg.Profile))
 }
+
+var readCueRecords = eval.ReadCueRecords
 
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -77,16 +85,20 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	case "run":
 		opts, err := parseRunArgs(args[1:])
+		if err == errHelp {
+			printRunHelp(stdout)
+			return 0
+		}
 		if err != nil {
 			fmt.Fprintf(stderr, "lark-cue run: %v\n\n", err)
 			printRunHelp(stderr)
 			return 2
 		}
 		return runCommand(context.Background(), cfg, opts, stdin, stdout, stderr)
+	case "benchmark":
+		return runBenchmarkCommand(context.Background(), cfg, args[1:], stdout, stderr)
 	case "eval":
 		return runEval(cfg, args[1:], stdout, stderr)
-	case "feedback":
-		return runFeedback(cfg, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "lark-cue: unknown command %q\n\n", args[0])
 		printHelp(stderr)
@@ -110,8 +122,6 @@ func parseRunArgs(args []string) (runOptions, error) {
 		case "--send-push":
 			opts.preparePush = true
 			opts.sendPush = true
-		case "--no-feedback-prompt":
-			opts.noFeedbackPrompt = true
 		case "--verbose":
 			opts.verbose = true
 		case "--push-chat":
@@ -158,6 +168,31 @@ func parseEvalReportArgs(args []string) (evalReportOptions, error) {
 	return opts, nil
 }
 
+func parseBenchmarkRunArgs(args []string) (benchmarkRunOptions, error) {
+	opts := benchmarkRunOptions{}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--cases":
+			if i+1 >= len(args) {
+				return opts, errors.New("--cases requires a path")
+			}
+			i++
+			opts.casesPath = args[i]
+		case "--verbose":
+			opts.verbose = true
+		case "-h", "--help":
+			return opts, errHelp
+		default:
+			return opts, fmt.Errorf("unknown flag %s", arg)
+		}
+	}
+	if strings.TrimSpace(opts.casesPath) == "" {
+		return opts, errors.New("--cases is required")
+	}
+	return opts, nil
+}
+
 func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin io.Reader, stdout, stderr io.Writer) int {
 	provider, err := newPlannerProvider(cfg.LLM)
 	if err != nil {
@@ -191,7 +226,7 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 		fmt.Fprintf(stderr, "lark-cue: planner failed: %v\n", plannerErr)
 		return result.ExitCode
 	}
-	decision.Queries = llm.NormalizeQueries(decision.Queries, 8, 120)
+	decision.Queries = llm.NormalizeQueries(decision.Queries, 8, 30)
 	if !decision.ShouldRetrieve {
 		if strings.TrimSpace(decision.Reason) != "" {
 			fmt.Fprintf(stderr, "\nlark-cue: no internal knowledge lookup recommended: %s\n", decision.Reason)
@@ -254,6 +289,7 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 		Command:         opts.command,
 		Output:          analysisOutput,
 		Scenario:        scenario,
+		PlannerReason:   decision.Reason,
 		Queries:         queries,
 		Evidence:        selected,
 		Confidence:      confidence,
@@ -302,18 +338,175 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 		}
 	}
 
-	feedbackState := "skipped"
 	kcard.LatencyMS = time.Since(started).Milliseconds()
-	if !opts.noFeedbackPrompt && isInteractive(stdin) && isInteractive(cueOutput) {
-		feedbackState = promptFeedback(stdin, cueOutput)
-	}
-	kcard.Feedback = feedbackState
+	kcard.Feedback = "skipped"
 
 	if err := eval.Append(cfg.Evaluation.LogPath, eval.FromCard(kcard)); err != nil {
 		fmt.Fprintf(stderr, "lark-cue: failed to write evaluation log: %v\n", err)
 	}
 
 	return result.ExitCode
+}
+
+func runBenchmarkCommand(ctx context.Context, cfg config.Config, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		printBenchmarkHelp(stdout)
+		return 0
+	}
+	switch args[0] {
+	case "-h", "--help", "help":
+		printBenchmarkHelp(stdout)
+		return 0
+	case "run":
+		opts, err := parseBenchmarkRunArgs(args[1:])
+		if err == errHelp {
+			printBenchmarkRunHelp(stdout)
+			return 0
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "lark-cue benchmark run: %v\n\n", err)
+			printBenchmarkRunHelp(stderr)
+			return 2
+		}
+		return runBenchmark(ctx, cfg, opts, stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "lark-cue benchmark: unknown command %q\n\n", args[0])
+		printBenchmarkHelp(stderr)
+		return 2
+	}
+}
+
+func runBenchmark(ctx context.Context, cfg config.Config, opts benchmarkRunOptions, stdout, stderr io.Writer) int {
+	cases, err := benchmark.LoadCases(opts.casesPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "lark-cue benchmark: %v\n", err)
+		return 2
+	}
+	if _, err := newPlannerProvider(cfg.LLM); err != nil {
+		fmt.Fprintf(stderr, "lark-cue benchmark: %v\n", err)
+		return 2
+	}
+	tempDir, err := os.MkdirTemp("", "lark-cue-benchmark-*")
+	if err != nil {
+		fmt.Fprintf(stderr, "lark-cue benchmark: failed to create temporary evaluation log: %v\n", err)
+		return 2
+	}
+	defer os.RemoveAll(tempDir)
+
+	benchCfg := cfg
+	benchCfg.Evaluation.LogPath = filepath.Join(tempDir, "evaluations.jsonl")
+	restoreEvalLogEnv := setBenchmarkEvalLogEnv(benchCfg.Evaluation.LogPath)
+	defer restoreEvalLogEnv()
+
+	results := make([]benchmark.CaseResult, 0, len(cases))
+	for _, c := range cases {
+		observation, err := runBenchmarkCase(ctx, benchCfg, c, opts.verbose)
+		if err != nil {
+			fmt.Fprintf(stderr, "lark-cue benchmark: %v\n", err)
+			return 2
+		}
+		results = append(results, benchmark.ScoreCase(c, observation))
+	}
+	summary := benchmark.Summarize(results, opts.verbose)
+	if shouldStyleOutput(stdout) {
+		fmt.Fprint(stdout, benchmark.RenderSummaryStyled(summary, terminalWidth(stdout)))
+	} else {
+		fmt.Fprint(stdout, benchmark.RenderSummary(summary))
+	}
+	if summary.AllPassed() {
+		return 0
+	}
+	return 1
+}
+
+func setBenchmarkEvalLogEnv(path string) func() {
+	old, hadOld := os.LookupEnv("LARK_CUE_EVAL_LOG")
+	_ = os.Setenv("LARK_CUE_EVAL_LOG", path)
+	return func() {
+		if hadOld {
+			_ = os.Setenv("LARK_CUE_EVAL_LOG", old)
+		} else {
+			_ = os.Unsetenv("LARK_CUE_EVAL_LOG")
+		}
+	}
+}
+
+func runBenchmarkCase(ctx context.Context, cfg config.Config, c benchmark.Case, verbose bool) (benchmark.Observation, error) {
+	observation := benchmark.Observation{CommandExitCode: -1}
+	setupOutput, setupErr := runBenchmarkSetup(ctx, c.Setup)
+	observation.SetupOutput = setupOutput
+	if setupErr != "" {
+		observation.SetupError = setupErr
+		observation.TeardownOutput, observation.TeardownErrors = runBenchmarkTeardown(ctx, c.Teardown)
+		return observation, nil
+	}
+
+	before, err := readCueRecords(cfg.Evaluation.LogPath)
+	if err != nil {
+		observation.TeardownOutput, observation.TeardownErrors = runBenchmarkTeardown(ctx, c.Teardown)
+		return observation, fmt.Errorf("failed to read benchmark evaluation log before case %q: %w", c.ID, err)
+	}
+	var stdout, stderr bytes.Buffer
+	observation.CommandExitCode = runCommand(ctx, cfg, runOptions{
+		command: c.Command,
+		verbose: verbose,
+	}, strings.NewReader(""), &stdout, &stderr)
+	observation.CommandOutput = stdout.String() + stderr.String()
+	after, err := readCueRecords(cfg.Evaluation.LogPath)
+	observation.TeardownOutput, observation.TeardownErrors = runBenchmarkTeardown(ctx, c.Teardown)
+	if err != nil {
+		return observation, fmt.Errorf("failed to read benchmark evaluation log after case %q: %w", c.ID, err)
+	}
+	if len(after.PlannerRecords) >= len(before.PlannerRecords) {
+		observation.PlannerRecords = append([]eval.Record(nil), after.PlannerRecords[len(before.PlannerRecords):]...)
+	}
+	if len(after.Records) >= len(before.Records) {
+		observation.CueRecords = append([]eval.Record(nil), after.Records[len(before.Records):]...)
+	}
+	return observation, nil
+}
+
+func runBenchmarkSetup(ctx context.Context, commands [][]string) (string, string) {
+	var output strings.Builder
+	for _, command := range commands {
+		out, exitCode, err := runBenchmarkAuxCommand(ctx, command)
+		output.WriteString(out)
+		if err != nil {
+			return output.String(), err.Error()
+		}
+		if exitCode != 0 {
+			return output.String(), fmt.Sprintf("%s exited %d", runner.CommandString(command), exitCode)
+		}
+	}
+	return output.String(), ""
+}
+
+func runBenchmarkTeardown(ctx context.Context, commands [][]string) (string, []string) {
+	var output strings.Builder
+	var errs []string
+	for _, command := range commands {
+		out, exitCode, err := runBenchmarkAuxCommand(ctx, command)
+		output.WriteString(out)
+		if err != nil {
+			errs = append(errs, err.Error())
+			continue
+		}
+		if exitCode != 0 {
+			errs = append(errs, fmt.Sprintf("%s exited %d", runner.CommandString(command), exitCode))
+		}
+	}
+	return output.String(), errs
+}
+
+func runBenchmarkAuxCommand(ctx context.Context, command []string) (string, int, error) {
+	var stdout, stderr bytes.Buffer
+	result, err := runner.Run(ctx, command, runner.Streams{
+		Stdin:  strings.NewReader(""),
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Buffer: runner.NewBoundedBuffer(256 * 1024),
+	})
+	return stdout.String() + stderr.String(), result.ExitCode, err
 }
 
 func scenarioFromDecision(decision llm.PlanDecision) detector.Scenario {
@@ -394,40 +587,6 @@ func runEval(cfg config.Config, args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-func runFeedback(cfg config.Config, args []string, stdout, stderr io.Writer) int {
-	if len(args) != 2 {
-		fmt.Fprintln(stderr, "usage: lark-cue feedback <card-id> useful|not-useful")
-		return 2
-	}
-	value := args[1]
-	if value != "useful" && value != "not-useful" {
-		fmt.Fprintln(stderr, "feedback must be useful or not-useful")
-		return 2
-	}
-	if err := eval.AppendFeedback(cfg.Evaluation.LogPath, args[0], value); err != nil {
-		fmt.Fprintf(stderr, "lark-cue: failed to write feedback: %v\n", err)
-		return 1
-	}
-	fmt.Fprintf(stdout, "Recorded feedback for %s: %s\n", args[0], value)
-	return 0
-}
-
-func promptFeedback(stdin io.Reader, stdout io.Writer) string {
-	fmt.Fprint(stdout, "\nWas this cue useful? [y/n/skip] ")
-	line, err := bufio.NewReader(stdin).ReadString('\n')
-	if err != nil && len(line) == 0 {
-		return "skipped"
-	}
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "y", "yes", "useful":
-		return "useful"
-	case "n", "no", "not-useful", "not_useful":
-		return "not-useful"
-	default:
-		return "skipped"
-	}
-}
-
 func isInteractive(value any) bool {
 	file, ok := value.(*os.File)
 	if !ok {
@@ -466,13 +625,13 @@ func printHelp(w io.Writer) {
 
 Usage:
   lark-cue run [flags] -- <command>
+  lark-cue benchmark run --cases <path> [flags]
   lark-cue eval report [flags]
-  lark-cue feedback <card-id> useful|not-useful
 
 Commands:
   run       Run a command and show an LLM-planned evidence-backed internal knowledge cue on failures
+  benchmark Run real benchmark cases and score cited expected sources
   eval      Summarize local cue evaluation records
-  feedback  Record useful/not-useful feedback for a generated cue
   help      Show this help
   version   Show version`)
 }
@@ -490,7 +649,6 @@ Flags:
   --prepare-push        Print a Feishu group message preview
   --send-push           Send the prepared message through lark-cli
   --push-chat <target>  Feishu chat id or chat name for push sending
-  --no-feedback-prompt  Do not ask for interactive useful/not-useful feedback
   --verbose             Print LLM/retrieval diagnostics without secrets`)
 }
 
@@ -500,6 +658,23 @@ func printEvalHelp(w io.Writer) {
 
 Commands:
   report  Summarize local cue evaluation records`)
+}
+
+func printBenchmarkHelp(w io.Writer) {
+	fmt.Fprintln(w, `Usage:
+  lark-cue benchmark run --cases <path> [flags]
+
+Commands:
+  run  Run real benchmark cases and score cited expected sources`)
+}
+
+func printBenchmarkRunHelp(w io.Writer) {
+	fmt.Fprintln(w, `Usage:
+  lark-cue benchmark run --cases <path> [flags]
+
+Flags:
+  --cases <path>  Benchmark case JSON file
+  --verbose       Include compact command diagnostics in the report`)
 }
 
 func printEvalReportHelp(w io.Writer) {

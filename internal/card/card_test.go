@@ -23,13 +23,36 @@ func TestTemplateFallbackCard(t *testing.T) {
 		Command:         []string{"node", "x.js"},
 		Output:          "missing required scope: docx:document:read",
 		Scenario:        scenario,
+		PlannerReason:   "失败输出命中内部权限配置问题，需要检索 Feishu 知识。",
+		Queries:         []string{"docx:document:read", "权限变更 重新授权", "docx:document:read"},
 		Evidence:        scored,
 		Confidence:      evidence.ConfidenceHigh,
 		RetrievalStatus: retrieval.StatusOK,
 	})
 	rendered := Render(card)
-	if !strings.Contains(rendered, "Sources") || !strings.Contains(rendered, "guide") || !strings.Contains(rendered, "High") {
-		t.Fatalf("rendered card missing expected content:\n%s", rendered)
+	for _, want := range []string{"LLM Plan", "Reason: 失败输出命中内部权限配置问题", "- docx:document:read", "- 权限变更 重新授权", "Sources", "guide", "High"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered card missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Count(rendered, "- docx:document:read") != 1 {
+		t.Fatalf("rendered card did not de-duplicate planner queries:\n%s", rendered)
+	}
+	if card.QueryCount != 2 {
+		t.Fatalf("QueryCount = %d, want 2", card.QueryCount)
+	}
+}
+
+func TestRenderOmitsEmptyLLMPlan(t *testing.T) {
+	rendered := Render(KnowledgeCard{
+		ID:          "cue_test",
+		Scenario:    "FlowOps DAG import error",
+		LikelyCause: "内部证据支持。",
+		NextAction:  "按内部文档处理。",
+		Confidence:  evidence.ConfidenceHigh,
+	})
+	if strings.Contains(rendered, "LLM Plan") {
+		t.Fatalf("rendered empty LLM plan:\n%s", rendered)
 	}
 }
 
@@ -601,13 +624,15 @@ func TestDocumentCitationIncludesIDWhenURLMissing(t *testing.T) {
 
 func TestStyledRenderKeepsCardContent(t *testing.T) {
 	rendered := RenderStyled(KnowledgeCard{
-		ID:          "cue_test",
-		Command:     "flowctl check billing_daily",
-		Scenario:    "FlowOps DAG import error",
-		LikelyCause: "内部证据支持 billing_daily 的 DAG import error 与 billing_region Variable.get 有关。",
-		NextAction:  "把 Variable.get 移到任务运行阶段，然后执行 flowctl dags list-import-errors 验证。",
-		Confidence:  evidence.ConfidenceHigh,
-		QueryCount:  4,
+		ID:            "cue_test",
+		Command:       "flowctl check billing_daily",
+		Scenario:      "FlowOps DAG import error",
+		PlannerReason: "DAG import error mentions billing_region.",
+		Queries:       []string{"FlowOps DAG import error", "billing_daily billing_region"},
+		LikelyCause:   "内部证据支持 billing_daily 的 DAG import error 与 billing_region Variable.get 有关。",
+		NextAction:    "把 Variable.get 移到任务运行阶段，然后执行 flowctl dags list-import-errors 验证。",
+		Confidence:    evidence.ConfidenceHigh,
+		QueryCount:    2,
 		Citations: []Citation{{
 			Type:    "doc",
 			Title:   "FlowOps FAQ",
@@ -615,7 +640,7 @@ func TestStyledRenderKeepsCardContent(t *testing.T) {
 			Summary: "FlowOps DAG import error billing_daily billing_region Variable.get",
 		}},
 	}, 100)
-	for _, want := range []string{"lark-cue", "cue_test", "Evidence", "FlowOps FAQ", "doc_token_123"} {
+	for _, want := range []string{"lark-cue", "cue_test", "LLM Plan", "DAG import error mentions billing_region", "FlowOps DAG import error", "billing_daily billing_region", "Evidence", "FlowOps FAQ", "doc_token_123"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("styled card missing %q:\n%s", want, rendered)
 		}

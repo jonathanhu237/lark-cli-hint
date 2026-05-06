@@ -12,12 +12,14 @@ import (
 
 func TestPrepareIncludesCaveatAndCitations(t *testing.T) {
 	markdown := Prepare(card.KnowledgeCard{
-		ID:          "cue_test",
-		Scenario:    "FlowOps DAG import error",
-		LikelyCause: "billing_daily 在解析阶段读取 billing_region Variable。",
-		NextAction:  "把 Variable.get 移到任务运行阶段后重新执行 flowctl check。",
-		Caveat:      "证据较弱，建议打开来源核对后再执行修复动作。",
-		Confidence:  evidence.ConfidenceHigh,
+		ID:            "cue_test",
+		Scenario:      "FlowOps DAG import error",
+		PlannerReason: "DAG import error mentions billing_region.",
+		Queries:       []string{"FlowOps DAG import error", "billing_daily billing_region"},
+		LikelyCause:   "billing_daily 在解析阶段读取 billing_region Variable。",
+		NextAction:    "把 Variable.get 移到任务运行阶段后重新执行 flowctl check。",
+		Caveat:        "证据较弱，建议打开来源核对后再执行修复动作。",
+		Confidence:    evidence.ConfidenceHigh,
 		Citations: []card.Citation{
 			{
 				Type:    "doc",
@@ -36,6 +38,9 @@ func TestPrepareIncludesCaveatAndCitations(t *testing.T) {
 	})
 	for _, want := range []string{
 		"证据较弱",
+		"LLM Plan",
+		"DAG import error mentions billing_region",
+		"billing_daily billing_region",
 		"FlowOps DAG Import Error 排障 FAQ",
 		"https://example.test/guide",
 		"FlowOps 排障群",

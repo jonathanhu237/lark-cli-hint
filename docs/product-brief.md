@@ -55,7 +55,7 @@ developer runs flowctl check billing_daily
 -> lark-cue searches Feishu Docs/Wiki/Sheets and IM through lark-cli
 -> lark-cue cites FlowOps FAQ / historical incident / development standard docs
 -> lark-cue recommends moving Variable.get out of DAG parse time or applying a short-term Variable unblock
--> evaluation report shows planner decisions, retrieval, citations, latency, and feedback
+-> benchmark/evaluation reports show planner decisions, retrieval, citations, and latency
 ```
 
 This demo is more convincing than a hardcoded Feishu API error because it shows a real internal-app-style CLI failure and internal knowledge reuse.
@@ -67,7 +67,7 @@ Current retrieval routes:
 - Docs/Wiki/Sheets through `lark-cli docs +search`
 - IM through `lark-cli im +messages-search`
 
-The first FlowOps seed creates Markdown documents only. IM retrieval remains enabled for real tenants and future seeded group discussions.
+The FlowOps seed creates or reuses a complete team Wiki from a repository manifest and Markdown files. IM retrieval remains enabled for real tenants and future seeded group discussions.
 
 ## lark-cli Role
 
@@ -115,7 +115,7 @@ If evidence is weak or absent, the card must say that internal evidence is insuf
 ## MVP Scope
 
 ```text
-run command -> command fails -> LLM planner -> Feishu retrieval -> evidence-grounded card -> feedback/eval
+run command -> command fails -> LLM planner -> Feishu retrieval -> evidence-grounded card -> eval log
 ```
 
 MVP requirements:
@@ -126,6 +126,7 @@ MVP requirements:
 - cited terminal card;
 - optional explicit Feishu push;
 - evaluation report;
+- real-command benchmark that checks expected seeded source citations;
 - reproducible FlowOps/Airflow demo and Feishu seed script.
 
 ## Out of Scope
@@ -145,8 +146,8 @@ The effect validation report should show:
 - cue runs;
 - retrieval status;
 - citation coverage;
+- benchmark expected-source hit rate and citation precision;
 - average query count;
-- average latency;
-- useful / not-useful feedback.
+- average latency.
 
 The demo should be judged by whether `lark-cue` shortens the path from a real internal-style CLI failure to a cited internal answer.

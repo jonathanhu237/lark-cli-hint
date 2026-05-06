@@ -82,7 +82,7 @@ func (r *LarkRetriever) Retrieve(ctx context.Context, queries []string) ([]Sourc
 			errs = append(errs, err.Error())
 		}
 		for _, doc := range docs {
-			key := "doc:" + firstNonEmpty(doc.URL, doc.ID, doc.Title)
+			key := "doc:" + firstNonEmpty(doc.ID, doc.URL, doc.Title)
 			if seen[key] {
 				continue
 			}

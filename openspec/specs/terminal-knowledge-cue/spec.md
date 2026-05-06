@@ -40,7 +40,8 @@ The system SHALL use a configured LLM planner to decide whether a failed wrapped
 
 #### Scenario: Planner query style
 - **WHEN** the planner returns queries
-- **THEN** the queries MUST be treated as keyword-style Feishu search phrases and normalized only by trimming, dropping empty entries, de-duplicating, and limiting the count
+- **THEN** the queries MUST be treated as keyword-style Feishu search phrases and normalized by trimming, dropping empty entries, de-duplicating, and limiting the count
+- **AND** each normalized query MUST be capped to Feishu document search limits
 
 ### Requirement: Real Feishu Retrieval
 The system SHALL use `lark-cli` at runtime to search real Feishu Docs/Wiki/Sheets and IM messages for candidate evidence using planner-generated keyword queries, without pinning known demo document titles, URLs, chat IDs, or final answers as the retrieval path.
@@ -140,8 +141,8 @@ The system SHALL support environment-variable and local-file configuration, with
 - **WHEN** the user runs `lark-cue run`
 - **THEN** the system MUST NOT expose or silently activate local fixture retrieval
 
-### Requirement: Feedback and Evaluation Logging
-The system SHALL create local evaluation records for planner decisions and cue attempts and SHALL support useful/not useful feedback collection for generated knowledge cards.
+### Requirement: Evaluation Logging
+The system SHALL create local evaluation records for planner decisions and cue attempts and SHALL NOT interrupt `run` with interactive feedback prompts.
 
 #### Scenario: Planner event is recorded
 - **WHEN** the planner decides whether to retrieve internal knowledge for a failed command
@@ -151,24 +152,16 @@ The system SHALL create local evaluation records for planner decisions and cue a
 - **WHEN** a knowledge card is generated
 - **THEN** the system MUST append a JSONL evaluation record containing card id, command, scenario, retrieval status, cited sources, latency, query count, confidence, and feedback state
 
-#### Scenario: Interactive feedback
-- **WHEN** a knowledge card is displayed in an interactive TTY session
-- **THEN** the system MUST allow the user to mark the card useful, not useful, or skipped
-
-#### Scenario: Non-interactive execution does not block
-- **WHEN** the command runs in a non-TTY context or feedback prompting is disabled
+#### Scenario: Run never prompts for feedback
+- **WHEN** a knowledge card is displayed
 - **THEN** the system MUST NOT wait for interactive feedback and MUST record feedback as absent or skipped
-
-#### Scenario: Feedback command updates an event
-- **WHEN** the user runs a feedback command with a known card id and useful/not-useful value
-- **THEN** the system MUST update or append evaluation state so the feedback can be included in validation reports
 
 ### Requirement: Evaluation Validation Report
 The system SHALL provide a read-only `lark-cue eval report` flow that summarizes recent planner and cue evaluation records in a terminal-readable validation view.
 
 #### Scenario: Report summarizes cue records
 - **WHEN** the evaluation log contains recent `type: "cue"` records
-- **THEN** the report MUST display run count, retrieval status counts, citation coverage, average source count, average query count, average latency, and feedback counts
+- **THEN** the report MUST display run count, retrieval status counts, citation coverage, average source count, average query count, and average latency
 
 #### Scenario: Report summarizes planner decisions
 - **WHEN** the evaluation log contains recent planner decision records

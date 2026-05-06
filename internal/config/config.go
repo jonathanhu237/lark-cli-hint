@@ -11,6 +11,7 @@ import (
 type Config struct {
 	LLM        LLMConfig
 	Feishu     FeishuConfig
+	Seed       SeedConfig
 	Evaluation EvaluationConfig
 }
 
@@ -24,6 +25,11 @@ type FeishuConfig struct {
 	Profile         string
 	DefaultPushChat string
 	SendPushDefault bool
+}
+
+type SeedConfig struct {
+	FeishuProfile string
+	WikiName      string
 }
 
 type EvaluationConfig struct {
@@ -88,6 +94,10 @@ func loadFile(path string, cfg *Config) error {
 			cfg.Feishu.Profile = value
 		case "feishu.send_push_default":
 			cfg.Feishu.SendPushDefault, _ = strconv.ParseBool(value)
+		case "seed.feishu_profile":
+			cfg.Seed.FeishuProfile = value
+		case "seed.wiki_name":
+			cfg.Seed.WikiName = value
 		case "evaluation.log_path":
 			cfg.Evaluation.LogPath = value
 		}

@@ -259,15 +259,7 @@ func RenderSummary(summary Summary) string {
 
 	fmt.Fprintf(&b, "Runtime\n")
 	fmt.Fprintf(&b, "- avg latency: %s\n", formatMillis(summary.AverageLatencyMS))
-	fmt.Fprintf(&b, "- avg queries/run: %.1f\n\n", summary.AverageQueryCount)
-
-	fmt.Fprintf(&b, "Feedback\n")
-	fmt.Fprintf(&b, "- useful: %d\n", summary.FeedbackCounts["useful"])
-	fmt.Fprintf(&b, "- not-useful: %d\n", summary.FeedbackCounts["not-useful"])
-	fmt.Fprintf(&b, "- skipped: %d\n", summary.FeedbackCounts["skipped"])
-	if unknown := summary.FeedbackCounts["unknown"]; unknown > 0 {
-		fmt.Fprintf(&b, "- unknown: %d\n", unknown)
-	}
+	fmt.Fprintf(&b, "- avg queries/run: %.1f\n", summary.AverageQueryCount)
 	if summary.MalformedLines > 0 {
 		fmt.Fprintf(&b, "\nWarnings\n- skipped malformed log lines: %d\n", summary.MalformedLines)
 	}
@@ -325,7 +317,6 @@ func RenderSummaryStyled(summary Summary, width int) string {
 		renderKV(label, body, "Retrieval", renderStatusCounts(summary.StatusCounts)),
 		renderKV(label, body, "Evidence", fmt.Sprintf("Citation coverage: %d/%d (%s)\nSources: %d total, %.1f per run", summary.RunsWithSources, summary.TotalRuns, percent(summary.RunsWithSources, summary.TotalRuns), summary.TotalSources, summary.AverageSources)),
 		renderKV(label, body, "Runtime", fmt.Sprintf("Average latency: %s\nAverage queries/run: %.1f", formatMillis(summary.AverageLatencyMS), summary.AverageQueryCount)),
-		renderKV(label, body, "Feedback", renderFeedback(summary.FeedbackCounts)),
 	)
 	if summary.MalformedLines > 0 {
 		sections = append(sections, warnStyle.Render(fmt.Sprintf("Warnings: skipped %d malformed log line(s).", summary.MalformedLines)))
@@ -348,28 +339,6 @@ func renderStatusCounts(counts map[string]int) string {
 	var extras []string
 	for key := range counts {
 		if !seen[key] {
-			extras = append(extras, key)
-		}
-	}
-	sort.Strings(extras)
-	for _, key := range extras {
-		parts = append(parts, fmt.Sprintf("%s %d", key, counts[key]))
-	}
-	return strings.Join(parts, " / ")
-}
-
-func renderFeedback(counts map[string]int) string {
-	parts := []string{
-		fmt.Sprintf("useful %d", counts["useful"]),
-		fmt.Sprintf("not-useful %d", counts["not-useful"]),
-		fmt.Sprintf("skipped %d", counts["skipped"]),
-	}
-	if unknown := counts["unknown"]; unknown > 0 {
-		parts = append(parts, fmt.Sprintf("unknown %d", unknown))
-	}
-	var extras []string
-	for key := range counts {
-		if key != "useful" && key != "not-useful" && key != "skipped" && key != "unknown" {
 			extras = append(extras, key)
 		}
 	}

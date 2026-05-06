@@ -1,0 +1,18 @@
+{
+  "cases": [
+    {
+      "id": "flowops-billing-daily-import-error",
+      "setup": [
+        ["flowctl", "init"]
+      ],
+      "command": ["flowctl", "check", "billing_daily"],
+      "expect_failure": true,
+      "expected_sources": [
+        "FlowOps DAG Import Error 排障 FAQ",
+        "FlowOps DAG 开发规范",
+        "billing_daily 历史故障复盘"
+      ],
+      "min_expected_hits": 1
+    }
+  ]
+}

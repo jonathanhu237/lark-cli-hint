@@ -16,42 +16,72 @@ export LARK_CUE_LLM_MODEL="..."
 export LARK_CUE_LLM_BASE_URL="https://api.openai.com/v1"
 ```
 
-Use the same `lark-cli` profile for seeding and runtime retrieval when demoing against a test tenant:
+Configure a seed-only `lark-cli` profile in `~/.lark-cue/config.toml` before writing demo knowledge:
 
-```sh
-export LARK_CUE_FEISHU_PROFILE="<test-profile>"
+```toml
+[seed]
+feishu_profile = "flowops-demo"
+wiki_name = "星桥科技 FlowOps 知识库"
 ```
 
-## Build
+Use the same profile for runtime retrieval when demoing against that test tenant:
+
+```toml
+[feishu]
+profile = "flowops-demo"
+```
+
+## Install
+
+Install `lark-cue` and the demo `flowctl` CLI yourself:
 
 ```sh
-go build -o ./bin/lark-cue ./cmd/lark-cue
+go install ./cmd/lark-cue
+examples/flowops-airflow/scripts/install-flowctl  # installs only when flowctl is missing
+lark-cue version
+flowctl help
 ```
+
+If `lark-cue` or `flowctl` is not found after install, add Go's bin directory to `PATH`:
+
+```sh
+export PATH="$(go env GOPATH)/bin:$PATH"
+```
+
+For local development builds that should not touch `PATH`, use `go build -o ./bin/lark-cue ./cmd/lark-cue`.
 
 ## FlowOps Demo
 
 The main demo uses a real local Airflow environment wrapped as 星桥科技's internal FlowOps platform.
 
 ```sh
-scripts/seed-flowops-feishu-demo
-scripts/seed-flowops-feishu-demo --apply --profile "$LARK_CUE_FEISHU_PROFILE"
+examples/flowops-airflow/scripts/seed-feishu
+examples/flowops-airflow/scripts/seed-feishu --apply
 
 cd examples/flowops-airflow
 cp .env.example .env
-./flowctl init
+flowctl init
 
-../../bin/lark-cue run -- ./flowctl check billing_daily
+lark-cue run -- flowctl check billing_daily
 ```
 
 See `docs/demo.md` and `examples/flowops-airflow/README.md` for the full recorded-demo flow.
 
+To benchmark whether the seeded Wiki sources are actually cited for the real FlowOps failure:
+
+```sh
+lark-cue benchmark run --cases examples/flowops-airflow/seed/eval-cases.json
+```
+
+The benchmark uses an isolated temporary evaluation log, runs real commands, and returns `0` only when every case passes. The FlowOps case runs `flowctl init` as lightweight setup. Run `flowctl clean` manually when you need a full reset.
+
 ## Evaluation
 
 ```sh
-./bin/lark-cue eval report
+lark-cue eval report
 ```
 
-The report summarizes planner decisions, cue runs, retrieval status, citation coverage, latency, query count, and feedback.
+The report summarizes planner decisions, cue runs, retrieval status, citation coverage, latency, and query count.
 
 ## Current Limitation
 

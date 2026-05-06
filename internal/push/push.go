@@ -12,6 +12,9 @@ func Prepare(k card.KnowledgeCard) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "**lark-cue 知识卡** `%s`\n\n", k.ID)
 	fmt.Fprintf(&b, "**场景**\n%s\n\n", k.Scenario)
+	if plan := k.LLMPlan(); plan != "" {
+		fmt.Fprintf(&b, "**LLM Plan**\n%s\n\n", plan)
+	}
 	fmt.Fprintf(&b, "**可能原因**\n%s\n\n", k.LikelyCause)
 	fmt.Fprintf(&b, "**建议下一步**\n%s\n\n", k.NextAction)
 	b.WriteString("**证据来源**\n")

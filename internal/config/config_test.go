@@ -33,3 +33,26 @@ func TestLoadFeishuProfileFromConfigAndEnv(t *testing.T) {
 		t.Fatalf("profile = %q, want env-profile", cfg.Feishu.Profile)
 	}
 }
+
+func TestLoadSeedConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".lark-cue")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[seed]\nfeishu_profile = \"flowops-demo\"\nwiki_name = \"星桥科技 FlowOps 知识库\"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Seed.FeishuProfile != "flowops-demo" {
+		t.Fatalf("seed profile = %q, want flowops-demo", cfg.Seed.FeishuProfile)
+	}
+	if cfg.Seed.WikiName != "星桥科技 FlowOps 知识库" {
+		t.Fatalf("seed wiki = %q", cfg.Seed.WikiName)
+	}
+}

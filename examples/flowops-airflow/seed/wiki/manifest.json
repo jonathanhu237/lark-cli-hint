@@ -1,0 +1,41 @@
+{
+  "wiki_name": "星桥科技 FlowOps 知识库",
+  "description": "星桥科技 FlowOps 调度平台内部知识库，收录发布、巡检、排障与复盘资料。",
+  "smoke_queries": [
+    "billing_daily",
+    "FlowOps DAG",
+    "FlowOps DAG 开发规范"
+  ],
+  "pages": [
+    {
+      "title": "FlowOps 调度平台",
+      "file": "FlowOps 调度平台.md",
+      "children": [
+        {
+          "title": "DAG 发布与巡检",
+          "file": "DAG 发布与巡检.md",
+          "children": [
+            {
+              "title": "FlowOps DAG Import Error 排障 FAQ",
+              "file": "FlowOps DAG Import Error 排障 FAQ.md"
+            },
+            {
+              "title": "FlowOps DAG 开发规范",
+              "file": "FlowOps DAG 开发规范.md"
+            }
+          ]
+        },
+        {
+          "title": "历史故障复盘",
+          "file": "历史故障复盘.md",
+          "children": [
+            {
+              "title": "billing_daily 历史故障复盘",
+              "file": "billing_daily 历史故障复盘.md"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
