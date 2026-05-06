@@ -105,7 +105,7 @@ func TestFlowOpsEvalCasesLoad(t *testing.T) {
 		t.Fatalf("FlowOps cases len = %d, want 1", len(cases))
 	}
 	got := cases[0]
-	if got.Command[0] != "flowctl" || !got.ExpectFailure || got.MinExpectedHits != 1 {
+	if got.Command[0] != "./flowctl" || !got.ExpectFailure || got.MinExpectedHits != 1 {
 		t.Fatalf("unexpected FlowOps case: %+v", got)
 	}
 }

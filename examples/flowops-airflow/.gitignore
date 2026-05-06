@@ -7,5 +7,6 @@
 /plugins/
 /tmp/
 /.tmp/
+/.demo-workspace/
 __pycache__/
 *.py[cod]

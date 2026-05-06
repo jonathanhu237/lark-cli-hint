@@ -369,13 +369,11 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 			Error:     openClawResult.Error,
 			LatencyMS: openClawResult.LatencyMS,
 		}
-		switch {
-		case openClawResult.Succeeded:
-			fmt.Fprintln(cueOutput, "lark-cue: OpenClaw handoff finished.")
-		case openClawResult.TimedOut:
-			fmt.Fprintf(cueOutput, "lark-cue: OpenClaw handoff timed out after %d seconds; preserving wrapped command exit code %d.\n", cfg.OpenClaw.TimeoutSeconds, result.ExitCode)
-		default:
-			fmt.Fprintf(cueOutput, "lark-cue: OpenClaw handoff failed: %s; preserving wrapped command exit code %d.\n", firstNonEmpty(openClawResult.Error, "unknown error"), result.ExitCode)
+		fmt.Fprintln(cueOutput)
+		if shouldStyleOutput(cueOutput) {
+			fmt.Fprint(cueOutput, openclaw.RenderResultStyled(openClawResult, result.ExitCode, terminalWidth(cueOutput)))
+		} else {
+			fmt.Fprint(cueOutput, openclaw.RenderResult(openClawResult, result.ExitCode))
 		}
 	} else if opts.noOpenClaw {
 		kcard.OpenClaw = card.OpenClawHandoff{SkippedReason: "--no-openclaw"}

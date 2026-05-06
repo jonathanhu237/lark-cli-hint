@@ -3,9 +3,9 @@
     {
       "id": "flowops-billing-daily-import-error",
       "setup": [
-        ["flowctl", "init"]
+        ["./flowctl", "init"]
       ],
-      "command": ["flowctl", "check", "billing_daily"],
+      "command": ["./flowctl", "check", "billing_daily"],
       "expect_failure": true,
       "expected_sources": [
         "FlowOps DAG Import Error 排障 FAQ",

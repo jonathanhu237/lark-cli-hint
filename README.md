@@ -16,7 +16,7 @@ export LARK_CUE_LLM_MODEL="..."
 export LARK_CUE_LLM_BASE_URL="https://api.openai.com/v1"
 ```
 
-- OpenClaw is required for the default `lark-cue run -- <command>` path. The run command preflights OpenClaw before executing the wrapped command, then hands the cited knowledge card to the local OpenClaw agent after card rendering when the planner selects internal-knowledge retrieval.
+- OpenClaw is required for the default `lark-cue run -- <command>` path. The run command preflights OpenClaw before executing the wrapped command, then hands the cited knowledge card to the local OpenClaw agent after card rendering when the planner selects internal-knowledge retrieval. OpenClaw output streams live, followed by a compact result card with status, duration, exit code, and output excerpt.
 
 Ensure the `openclaw` binary is on `PATH` and the agent CLI is available:
 
@@ -75,15 +75,13 @@ The main demo uses a real local Airflow environment wrapped as 星桥科技's in
 examples/flowops-airflow/scripts/seed-feishu
 examples/flowops-airflow/scripts/seed-feishu --apply
 
-cd examples/flowops-airflow
-cp .env.example .env
-flowctl init
-
-# Default demo path: card, then OpenClaw local main-agent handoff.
-lark-cue run -- flowctl check billing_daily
+# Reset a disposable broken workspace, then run the default demo path:
+# card, then OpenClaw local main-agent handoff.
+examples/flowops-airflow/scripts/reset-demo
+examples/flowops-airflow/scripts/run-demo
 
 # Local card-only path: skip OpenClaw preflight and handoff.
-lark-cue run --no-openclaw -- flowctl check billing_daily
+examples/flowops-airflow/scripts/run-demo --no-openclaw
 ```
 
 See `docs/demo.md` and `examples/flowops-airflow/README.md` for the full recorded-demo flow.
@@ -91,10 +89,12 @@ See `docs/demo.md` and `examples/flowops-airflow/README.md` for the full recorde
 To benchmark whether the seeded Wiki sources are actually cited for the real FlowOps failure:
 
 ```sh
-lark-cue benchmark run --cases examples/flowops-airflow/seed/eval-cases.json
+examples/flowops-airflow/scripts/reset-demo
+cd examples/flowops-airflow/.demo-workspace
+lark-cue benchmark run --cases ../seed/eval-cases.json
 ```
 
-The benchmark uses an isolated temporary evaluation log, runs real commands, and returns `0` only when every case passes. The FlowOps case runs `flowctl init` as lightweight setup. Use `--no-openclaw` for a card-only benchmark run. Run `flowctl clean` manually when you need a full reset.
+The benchmark uses an isolated temporary evaluation log, runs real commands, and returns `0` only when every case passes. The FlowOps case runs `./flowctl init` as lightweight setup inside the disposable workspace. Use `--no-openclaw` for a card-only benchmark run. Run `examples/flowops-airflow/scripts/reset-demo` when you need a full reset.
 
 ## Evaluation
 

@@ -55,6 +55,7 @@ func TestInvokeUsesLocalMainAgentAndRoutesOutput(t *testing.T) {
 		got = append([]string(nil), command...)
 		_, _ = io.WriteString(streams.Stdout, "stdout\n")
 		_, _ = io.WriteString(streams.Stderr, "stderr\n")
+		_, _ = io.WriteString(streams.Buffer, "stdout\nstderr\n")
 		return runner.Result{ExitCode: 0}, nil
 	})
 
@@ -69,6 +70,9 @@ func TestInvokeUsesLocalMainAgentAndRoutesOutput(t *testing.T) {
 	}
 	if out.String() != "stdout\nstderr\n" {
 		t.Fatalf("routed output = %q", out.String())
+	}
+	if result.Output != "stdout\nstderr\n" {
+		t.Fatalf("captured output = %q", result.Output)
 	}
 }
 
@@ -138,6 +142,33 @@ func TestBuildTaskIncludesContextEvidenceAndConstraints(t *testing.T) {
 	} {
 		if !strings.Contains(task, want) {
 			t.Fatalf("task missing %q:\n%s", want, task)
+		}
+	}
+}
+
+func TestRenderResultShowsStatusDetailsAndOutputExcerpt(t *testing.T) {
+	rendered := RenderResult(Result{
+		Succeeded: true,
+		ExitCode:  0,
+		LatencyMS: 1250,
+		Command:   []string{"openclaw", "agent", "--local"},
+		Output:    strings.Join([]string{"line1", "line2", "line3"}, "\n"),
+	}, 1)
+
+	for _, want := range []string{
+		"OpenClaw result",
+		"Status",
+		"Succeeded",
+		"agent: main",
+		"OpenClaw exit code: 0",
+		"duration: 1.2s",
+		"wrapped command exit preserved: 1",
+		"Output excerpt",
+		"line3",
+		"Next",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered result missing %q:\n%s", want, rendered)
 		}
 	}
 }

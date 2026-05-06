@@ -322,7 +322,8 @@ func TestRunInvokesOpenClawAfterCardAndPreservesExitCode(t *testing.T) {
 	}
 	cardAt := strings.Index(stderr.String(), "lark-cue knowledge card")
 	openClawAt := strings.Index(stderr.String(), "openclaw stdout")
-	if cardAt < 0 || openClawAt < 0 || cardAt > openClawAt {
+	resultAt := strings.Index(stderr.String(), "OpenClaw result")
+	if cardAt < 0 || openClawAt < 0 || resultAt < 0 || cardAt > openClawAt || openClawAt > resultAt {
 		t.Fatalf("OpenClaw output should appear after card:\n%s", stderr.String())
 	}
 	for _, want := range []string{
@@ -335,8 +336,10 @@ func TestRunInvokesOpenClawAfterCardAndPreservesExitCode(t *testing.T) {
 			t.Fatalf("OpenClaw task missing %q:\n%s", want, fakeOpenClaw.task)
 		}
 	}
-	if !strings.Contains(stderr.String(), "OpenClaw handoff failed: agent failed") {
-		t.Fatalf("stderr missing OpenClaw failure diagnostic:\n%s", stderr.String())
+	for _, want := range []string{"OpenClaw result", "Failed", "error: agent failed", "Output excerpt", "openclaw stderr"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing OpenClaw result field %q:\n%s", want, stderr.String())
+		}
 	}
 	result, err := eval.ReadCueRecords(logPath)
 	if err != nil {
@@ -873,6 +876,9 @@ func (f *fakeOpenClawClient) Invoke(ctx context.Context, task string, stderr io.
 	result := f.result
 	if !result.Attempted {
 		result.Attempted = true
+	}
+	if result.Output == "" {
+		result.Output = f.output
 	}
 	return result
 }

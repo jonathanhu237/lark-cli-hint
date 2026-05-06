@@ -29,6 +29,7 @@ type Result struct {
 	Error     string
 	LatencyMS int64
 	Command   []string
+	Output    string
 }
 
 func New(cfg config.OpenClawConfig) *Client {
@@ -72,13 +73,15 @@ func (c *Client) Invoke(ctx context.Context, task string, stderr io.Writer) Resu
 		ExitCode:  -1,
 		Command:   append([]string(nil), command...),
 	}
+	outputBuffer := runner.NewBoundedBuffer(16 * 1024)
 	runResult, err := c.run(timeoutCtx, command, runner.Streams{
 		Stdout: stderr,
 		Stderr: stderr,
-		Buffer: runner.NewBoundedBuffer(8 * 1024),
+		Buffer: outputBuffer,
 	})
 	result.LatencyMS = time.Since(started).Milliseconds()
 	result.ExitCode = runResult.ExitCode
+	result.Output = outputBuffer.String()
 	if errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
 		result.TimedOut = true
 		result.Error = "OpenClaw invocation timed out"

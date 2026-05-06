@@ -14,5 +14,5 @@ func TestFlowOpsE2ERequiresExplicitEnvironment(t *testing.T) {
 			t.Fatalf("%s is required for FlowOps E2E", env)
 		}
 	}
-	t.Skip("FlowOps E2E is intentionally manual for now: run examples/flowops-airflow/scripts/seed-feishu --apply, initialize examples/flowops-airflow, then execute lark-cue run against flowctl check billing_daily")
+	t.Skip("FlowOps E2E is intentionally manual for now: run examples/flowops-airflow/scripts/seed-feishu --apply, reset examples/flowops-airflow/.demo-workspace, then execute lark-cue run against ./flowctl check billing_daily")
 }

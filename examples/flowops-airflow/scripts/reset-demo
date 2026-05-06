@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "${SOURCE}" ]]; do
+  SOURCE_DIR="$(cd -P "$(dirname "${SOURCE}")" && pwd)"
+  SOURCE="$(readlink "${SOURCE}")"
+  [[ "${SOURCE}" != /* ]] && SOURCE="${SOURCE_DIR}/${SOURCE}"
+done
+
+SCRIPT_DIR="$(cd -P "$(dirname "${SOURCE}")" && pwd)"
+DEMO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+WORKSPACE_DIR="${FLOWOPS_DEMO_WORKSPACE:-${DEMO_DIR}/.demo-workspace}"
+FIXTURE="broken"
+QUIET=0
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  examples/flowops-airflow/scripts/reset-demo [--fixture broken|fixed] [--workspace <dir>] [--quiet]
+
+Creates a disposable FlowOps Airflow workspace for demo runs.
+The default fixture is the intentionally broken DAG import case.
+USAGE
+}
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --fixture)
+      if [[ "$#" -lt 2 ]]; then
+        echo "reset-demo: --fixture requires broken or fixed" >&2
+        exit 2
+      fi
+      FIXTURE="$2"
+      shift 2
+      ;;
+    --workspace)
+      if [[ "$#" -lt 2 ]]; then
+        echo "reset-demo: --workspace requires a directory" >&2
+        exit 2
+      fi
+      WORKSPACE_DIR="$2"
+      shift 2
+      ;;
+    --quiet)
+      QUIET=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "reset-demo: unknown flag: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+FIXTURE_DIR="${DEMO_DIR}/fixtures/${FIXTURE}"
+if [[ ! -d "${FIXTURE_DIR}/dags" ]]; then
+  echo "reset-demo: unknown fixture ${FIXTURE}; expected broken or fixed" >&2
+  exit 2
+fi
+
+rm -rf "${WORKSPACE_DIR}"
+mkdir -p "${WORKSPACE_DIR}/dags" "${WORKSPACE_DIR}/logs" "${WORKSPACE_DIR}/plugins"
+
+cp "${DEMO_DIR}/flowctl" "${WORKSPACE_DIR}/flowctl"
+cp "${DEMO_DIR}/docker-compose.yaml" "${WORKSPACE_DIR}/docker-compose.yaml"
+cp "${DEMO_DIR}/.env.example" "${WORKSPACE_DIR}/.env.example"
+if [[ -f "${DEMO_DIR}/.env" ]]; then
+  cp "${DEMO_DIR}/.env" "${WORKSPACE_DIR}/.env"
+else
+  cp "${DEMO_DIR}/.env.example" "${WORKSPACE_DIR}/.env"
+fi
+cp -R "${FIXTURE_DIR}/dags/." "${WORKSPACE_DIR}/dags/"
+chmod +x "${WORKSPACE_DIR}/flowctl"
+
+if [[ "${QUIET}" -ne 1 ]]; then
+  echo "FlowOps demo workspace reset"
+  echo "Fixture: ${FIXTURE}"
+  echo "Workspace: ${WORKSPACE_DIR}"
+  echo
+  echo "Next:"
+  echo "  cd ${WORKSPACE_DIR}"
+  echo "  ./flowctl init"
+  echo "  lark-cue run -- ./flowctl check billing_daily"
+fi
