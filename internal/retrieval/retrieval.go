@@ -119,29 +119,31 @@ func (r *LarkRetriever) Retrieve(ctx context.Context, queries []string) ([]Sourc
 }
 
 func (r *LarkRetriever) searchDocs(ctx context.Context, query string) ([]Source, error) {
-	out, err := r.client.RunJSON(ctx, "docs", "+search", "--query", query, "--page-size", "5", "--format", "json")
-	if err != nil {
-		return nil, err
-	}
-	results := arrayAt(out, "data", "results")
 	var sources []Source
-	for _, item := range results {
-		obj, ok := item.(map[string]any)
-		if !ok {
-			continue
+	for _, variant := range searchVariants(query, 30) {
+		out, err := r.client.RunJSON(ctx, "docs", "+search", "--query", variant, "--page-size", "5", "--format", "json")
+		if err != nil {
+			return sources, err
 		}
-		meta, _ := obj["result_meta"].(map[string]any)
-		source := Source{
-			Type:    "doc",
-			Title:   cleanHighlight(stringAt(obj, "title_highlighted")),
-			Summary: cleanHighlight(stringAt(obj, "summary_highlighted")),
-			URL:     stringAt(meta, "url"),
-			ID:      stringAt(meta, "token"),
+		results := arrayAt(out, "data", "results")
+		for _, item := range results {
+			obj, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			meta, _ := obj["result_meta"].(map[string]any)
+			source := Source{
+				Type:    "doc",
+				Title:   cleanHighlight(stringAt(obj, "title_highlighted")),
+				Summary: cleanHighlight(stringAt(obj, "summary_highlighted")),
+				URL:     stringAt(meta, "url"),
+				ID:      stringAt(meta, "token"),
+			}
+			if source.Title == "" {
+				source.Title = firstNonEmpty(source.ID, source.URL)
+			}
+			sources = append(sources, source)
 		}
-		if source.Title == "" {
-			source.Title = firstNonEmpty(source.ID, source.URL)
-		}
-		sources = append(sources, source)
 	}
 	return sources, nil
 }
@@ -164,30 +166,95 @@ func (r *LarkRetriever) fetchDoc(ctx context.Context, source Source) (Source, er
 }
 
 func (r *LarkRetriever) searchMessages(ctx context.Context, query string) ([]Source, error) {
-	out, err := r.client.RunJSON(ctx, "im", "+messages-search", "--query", query, "--page-size", "5", "--format", "json")
-	if err != nil {
-		return nil, err
-	}
-	messages := arrayAt(out, "data", "messages")
 	var sources []Source
-	for _, item := range messages {
-		obj, ok := item.(map[string]any)
-		if !ok {
-			continue
+	for _, variant := range searchVariants(query, 50) {
+		out, err := r.client.RunJSON(ctx, "im", "+messages-search", "--query", variant, "--page-size", "5", "--format", "json")
+		if err != nil {
+			return sources, err
 		}
-		sender, _ := obj["sender"].(map[string]any)
-		source := Source{
-			Type:      "im",
-			ID:        stringAt(obj, "message_id"),
-			Content:   stringAt(obj, "content"),
-			ChatName:  stringAt(obj, "chat_name"),
-			Sender:    stringAt(sender, "name"),
-			Timestamp: stringAt(obj, "create_time"),
-			Fetched:   stringAt(obj, "content") != "",
+		messages := arrayAt(out, "data", "messages")
+		for _, item := range messages {
+			obj, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			sender, _ := obj["sender"].(map[string]any)
+			source := Source{
+				Type:      "im",
+				ID:        stringAt(obj, "message_id"),
+				Content:   stringAt(obj, "content"),
+				ChatName:  stringAt(obj, "chat_name"),
+				Sender:    stringAt(sender, "name"),
+				Timestamp: stringAt(obj, "create_time"),
+				Fetched:   stringAt(obj, "content") != "",
+			}
+			sources = append(sources, source)
 		}
-		sources = append(sources, source)
 	}
 	return sources, nil
+}
+
+func searchVariants(query string, limit int) []string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil
+	}
+	if limit <= 0 || runeLen(query) <= limit {
+		return []string{query}
+	}
+	var variants []string
+	var current string
+	for _, token := range strings.Fields(query) {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		if runeLen(token) > limit {
+			token = truncateRunes(token, limit)
+		}
+		next := token
+		if current != "" {
+			next = current + " " + token
+		}
+		if runeLen(next) <= limit {
+			current = next
+			continue
+		}
+		if current != "" {
+			variants = append(variants, current)
+		}
+		current = token
+	}
+	if current != "" {
+		variants = append(variants, current)
+	}
+	return uniqueNonEmpty(variants)
+}
+
+func runeLen(value string) int {
+	return len([]rune(value))
+}
+
+func truncateRunes(value string, limit int) string {
+	runes := []rune(value)
+	if limit <= 0 || len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
+}
+
+func uniqueNonEmpty(values []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 func arrayAt(obj map[string]any, path ...string) []any {

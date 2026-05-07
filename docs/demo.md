@@ -64,6 +64,7 @@ Configure a test Feishu profile for seed writes and runtime retrieval in `~/.lar
 [seed]
 feishu_profile = "flowops-demo"
 wiki_name = "星桥科技 FlowOps 知识库"
+im_chat = "星桥科技 FlowOps 排障演示群"
 
 [feishu]
 profile = "flowops-demo"
@@ -90,14 +91,15 @@ The script creates or reuses the team Wiki named `星桥科技 FlowOps 知识库
 └── FlowOps 调度平台
     ├── DAG 发布与巡检
     │   ├── FlowOps DAG Import Error 排障 FAQ
-    │   └── FlowOps DAG 开发规范
+    │   ├── FlowOps DAG 开发规范
+    │   └── FlowOps Source Schema Drift 排障 FAQ
     └── 历史故障复盘
         └── billing_daily 历史故障复盘
 ```
 
-The seed content lives in `examples/flowops-airflow/seed/wiki/manifest.json` and sibling Markdown files. The script is idempotent: repeated runs update managed pages and move them back to the manifest-defined parents without creating duplicates. It does not send IM messages, delete resources, prune non-manifest pages, write personal-library documents, or write without `--apply`.
+The seed content lives in `examples/flowops-airflow/seed/wiki/manifest.json` and sibling Markdown files. The script is idempotent for Wiki pages: repeated runs update managed pages and move them back to the manifest-defined parents without creating duplicates. It also sends IM seed messages to the configured test chat with deterministic idempotency keys. It does not delete resources, prune non-manifest pages, write personal-library documents, send to unconfigured chats, or write without `--apply`.
 
-After apply, run the smoke searches printed by the script. Feishu indexing can lag, so wait and retry if the documents do not appear immediately.
+After apply, run the smoke searches printed by the script. Feishu indexing can lag, so wait and retry if the documents or group messages do not appear immediately.
 
 ## Start the Local FlowOps Demo
 
@@ -106,13 +108,14 @@ The demo uses real Airflow through Docker Compose. Always run it from a disposab
 ```sh
 examples/flowops-airflow/scripts/reset-demo
 cd examples/flowops-airflow/.demo-workspace
-./flowctl init
+export PATH="$PWD:$PATH"
+flowctl init
 ```
 
 Confirm the broken path:
 
 ```sh
-./flowctl check billing_daily
+flowctl check billing_daily
 ```
 
 Expected output includes a DAG import error for `billing_daily`, `Variable.get("billing_region")`, or a missing `billing_region` variable. The exact traceback can vary by Airflow version.
@@ -128,12 +131,12 @@ export LARK_CUE_EVAL_LOG="$(mktemp -t lark-cue-flowops-evaluations.XXXXXX)"
 Run the default OpenClaw demo path:
 
 ```sh
-lark-cue run -- ./flowctl check billing_daily
+lark-cue run -- flowctl check billing_daily
 ```
 
 Expected behavior:
 
-- before `./flowctl check billing_daily` starts, `lark-cue` verifies that `openclaw agent --help` can run;
+- before `flowctl check billing_daily` starts, `lark-cue` verifies that `openclaw agent --help` can run;
 - the original FlowOps/Airflow error remains visible;
 - `lark-cue` shows the planner-selected FlowOps scenario;
 - the knowledge card shows the LLM planner reason and generated keyword queries;
@@ -145,10 +148,34 @@ Expected behavior:
 Run the local card-only path when OpenClaw is not installed or when you only want to inspect the card:
 
 ```sh
-lark-cue run --no-openclaw -- ./flowctl check billing_daily
+lark-cue run --no-openclaw -- flowctl check billing_daily
 ```
 
 In card-only mode, `lark-cue` still requires LLM configuration and Feishu access, but it does not preflight or invoke OpenClaw.
+
+## Run the IM Retrieval Scenario
+
+This scenario shows group-message retrieval for fresh operational knowledge that has not been fully folded into Wiki docs.
+
+```sh
+flowctl source reset billing_export_2026
+flowctl check billing_export_2026
+lark-cue run --no-openclaw -- flowctl check billing_export_2026
+```
+
+Expected behavior:
+
+- the raw command reports `FlowOpsSourceError: billing_export_2026 source schema drift`;
+- the card cites `FlowOps Source Schema Drift 排障 FAQ` when Wiki search hits;
+- the card cites `群聊 / 星桥科技 FlowOps 排障演示群` when IM search hits;
+- the LLM action plan should include the group-confirmed sequence: do not edit the DAG, run `flowctl source refresh billing_export_2026 --alias customer_segment=segment`, then rerun `flowctl check billing_export_2026`.
+
+Manual verification:
+
+```sh
+flowctl source refresh billing_export_2026 --alias customer_segment=segment
+flowctl check billing_export_2026
+```
 
 Then show validation:
 
@@ -165,10 +192,11 @@ Use the benchmark when you want a repeatable score instead of a single recorded 
 ```sh
 examples/flowops-airflow/scripts/reset-demo
 cd examples/flowops-airflow/.demo-workspace
+export PATH="$PWD:$PATH"
 lark-cue benchmark run --cases ../seed/eval-cases.json
 ```
 
-The benchmark runs real commands through the same `lark-cue run -- <command>` path, writes planner/cue records to a temporary evaluation log, and scores exact citation-title matches against the seeded Wiki titles declared in `eval-cases.json`. The FlowOps case uses `./flowctl init` as lightweight setup inside the disposable workspace. It does not run automatically from tests because it depends on Docker, LLM access, Feishu access, and local indexing state.
+The benchmark runs real commands through the same `lark-cue run -- <command>` path, writes planner/cue records to a temporary evaluation log, and scores exact citation-title matches against the seeded Wiki titles declared in `eval-cases.json`. The FlowOps case uses `flowctl init` as lightweight setup inside the disposable workspace. It does not run automatically from tests because it depends on Docker, LLM access, Feishu access, and local indexing state.
 
 For local benchmark runs that should avoid OpenClaw, pass the benchmark opt-out:
 
@@ -183,13 +211,13 @@ Keep the default benchmark command for the contest story where OpenClaw is part 
 Preview a Feishu group card without sending:
 
 ```sh
-lark-cue run --prepare-push -- ./flowctl check billing_daily
+lark-cue run --prepare-push -- flowctl check billing_daily
 ```
 
 Actual sending requires an explicit send flag and target:
 
 ```sh
-lark-cue run --send-push --push-chat "oc_xxx" -- ./flowctl check billing_daily
+lark-cue run --send-push --push-chat "oc_xxx" -- flowctl check billing_daily
 ```
 
 OpenClaw does not make Feishu sending implicit. Sending a group push still requires the explicit send flag and target. The same safety boundary applies to other high-risk actions: OpenClaw should ask before deleting data, changing production configuration, rotating secrets, sending messages, committing code, pushing code, or performing similar external side effects.
@@ -197,6 +225,6 @@ OpenClaw does not make Feishu sending implicit. Sending a group push still requi
 ## Cleanup
 
 ```sh
-./flowctl down
+flowctl down
 examples/flowops-airflow/scripts/reset-demo
 ```

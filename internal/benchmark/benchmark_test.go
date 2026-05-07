@@ -101,12 +101,16 @@ func TestFlowOpsEvalCasesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCases FlowOps eval cases error: %v", err)
 	}
-	if len(cases) != 1 {
-		t.Fatalf("FlowOps cases len = %d, want 1", len(cases))
+	if len(cases) != 2 {
+		t.Fatalf("FlowOps cases len = %d, want 2", len(cases))
 	}
 	got := cases[0]
-	if got.Command[0] != "./flowctl" || !got.ExpectFailure || got.MinExpectedHits != 1 {
+	if got.Command[0] != "flowctl" || !got.ExpectFailure || got.MinExpectedHits != 1 {
 		t.Fatalf("unexpected FlowOps case: %+v", got)
+	}
+	imCase := cases[1]
+	if imCase.ID != "flowops-billing-export-source-schema-drift" || imCase.Command[2] != "billing_export_2026" {
+		t.Fatalf("unexpected FlowOps IM case: %+v", imCase)
 	}
 }
 
@@ -162,6 +166,26 @@ func TestScoreCaseFailsExpectedFailureMismatch(t *testing.T) {
 	}
 	if !containsJoined(result.Failures, "expected command failure") {
 		t.Fatalf("missing expected failure mismatch: %+v", result.Failures)
+	}
+}
+
+func TestScoreCaseMatchesIMChatName(t *testing.T) {
+	c := Case{
+		ID:              "flowops-im",
+		Command:         []string{"flowctl", "check", "billing_export_2026"},
+		ExpectFailure:   true,
+		ExpectedSources: []string{"星桥科技 FlowOps 排障演示群"},
+		MinExpectedHits: 1,
+	}
+	result := ScoreCase(c, Observation{
+		CommandExitCode: 1,
+		CueRecords: []eval.Record{{
+			Type:    "cue",
+			Sources: []card.Citation{{Type: "im", ChatName: "星桥科技 FlowOps 排障演示群", Summary: "source refresh"}},
+		}},
+	})
+	if !result.Passed || !containsJoined(result.MatchedSources, "星桥科技 FlowOps 排障演示群") {
+		t.Fatalf("result = %+v, want IM chat source match", result)
 	}
 }
 

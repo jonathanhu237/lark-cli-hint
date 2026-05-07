@@ -3,14 +3,27 @@
     {
       "id": "flowops-billing-daily-import-error",
       "setup": [
-        ["./flowctl", "init"]
+        ["flowctl", "init"]
       ],
-      "command": ["./flowctl", "check", "billing_daily"],
+      "command": ["flowctl", "check", "billing_daily"],
       "expect_failure": true,
       "expected_sources": [
         "FlowOps DAG Import Error 排障 FAQ",
         "FlowOps DAG 开发规范",
         "billing_daily 历史故障复盘"
+      ],
+      "min_expected_hits": 1
+    },
+    {
+      "id": "flowops-billing-export-source-schema-drift",
+      "setup": [
+        ["flowctl", "source", "reset", "billing_export_2026"]
+      ],
+      "command": ["flowctl", "check", "billing_export_2026"],
+      "expect_failure": true,
+      "expected_sources": [
+        "FlowOps Source Schema Drift 排障 FAQ",
+        "星桥科技 FlowOps 排障演示群"
       ],
       "min_expected_hits": 1
     }

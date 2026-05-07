@@ -44,6 +44,34 @@ func TestRetrieveSearchesDocsAndIMForEachQuery(t *testing.T) {
 	}
 }
 
+func TestRetrieveSplitsOverlongQueriesPerRoute(t *testing.T) {
+	runner := &recordingJSONRunner{}
+	retriever := NewLarkRetriever(runner)
+	_, status, err := retriever.Retrieve(context.Background(), []string{"billing_export_2026 customer_segment"})
+	if err != nil {
+		t.Fatalf("Retrieve error: %v", err)
+	}
+	if status != StatusOK {
+		t.Fatalf("status = %s, want ok", status)
+	}
+	want := []string{
+		"docs:billing_export_2026",
+		"docs:customer_segment",
+		"im:billing_export_2026 customer_segment",
+	}
+	if !slices.Equal(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestSearchVariantsTruncatesLongSingleToken(t *testing.T) {
+	got := searchVariants("abcdefghijklmnopqrstuvwxyz0123456789", 10)
+	want := []string{"abcdefghij"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("variants = %#v, want %#v", got, want)
+	}
+}
+
 func TestRetrieveDeduplicatesDocsByTokenBeforeURL(t *testing.T) {
 	retriever := NewLarkRetriever(duplicateDocRunner{})
 	sources, status, err := retriever.Retrieve(context.Background(), []string{"FlowOps DAG", "billing_daily"})

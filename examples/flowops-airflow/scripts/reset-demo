@@ -85,6 +85,7 @@ if [[ "${QUIET}" -ne 1 ]]; then
   echo
   echo "Next:"
   echo "  cd ${WORKSPACE_DIR}"
-  echo "  ./flowctl init"
-  echo "  lark-cue run -- ./flowctl check billing_daily"
+  echo "  export PATH=\"\$PWD:\$PATH\""
+  echo "  flowctl init"
+  echo "  lark-cue run -- flowctl check billing_daily"
 fi

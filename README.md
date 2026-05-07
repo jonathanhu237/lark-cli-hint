@@ -38,6 +38,7 @@ Configure a seed-only `lark-cli` profile in `~/.lark-cue/config.toml` before wri
 [seed]
 feishu_profile = "flowops-demo"
 wiki_name = "星桥科技 FlowOps 知识库"
+im_chat = "星桥科技 FlowOps 排障演示群"
 ```
 
 Use the same profile for runtime retrieval when demoing against that test tenant:
@@ -75,26 +76,38 @@ The main demo uses a real local Airflow environment wrapped as 星桥科技's in
 examples/flowops-airflow/scripts/seed-feishu
 examples/flowops-airflow/scripts/seed-feishu --apply
 
-# Reset a disposable broken workspace, then run the default demo path:
-# card, then OpenClaw local main-agent handoff.
+# Reset a disposable broken workspace.
 examples/flowops-airflow/scripts/reset-demo
-examples/flowops-airflow/scripts/run-demo
+cd examples/flowops-airflow/.demo-workspace
+export PATH="$PWD:$PATH"
+flowctl init
+
+# Default demo path: card, then OpenClaw local main-agent handoff.
+lark-cue run -- flowctl check billing_daily
 
 # Local card-only path: skip OpenClaw preflight and handoff.
-examples/flowops-airflow/scripts/run-demo --no-openclaw
+lark-cue run --no-openclaw -- flowctl check billing_daily
+
+# IM retrieval path: show latest group discussion for source schema drift.
+flowctl source reset billing_export_2026
+flowctl check billing_export_2026
+lark-cue run --no-openclaw -- flowctl check billing_export_2026
+flowctl source refresh billing_export_2026 --alias customer_segment=segment
+flowctl check billing_export_2026
 ```
 
 See `docs/demo.md` and `examples/flowops-airflow/README.md` for the full recorded-demo flow.
 
-To benchmark whether the seeded Wiki sources are actually cited for the real FlowOps failure:
+To benchmark whether the seeded Wiki and IM sources are actually cited for the real FlowOps failures:
 
 ```sh
 examples/flowops-airflow/scripts/reset-demo
 cd examples/flowops-airflow/.demo-workspace
+export PATH="$PWD:$PATH"
 lark-cue benchmark run --cases ../seed/eval-cases.json
 ```
 
-The benchmark uses an isolated temporary evaluation log, runs real commands, and returns `0` only when every case passes. The FlowOps case runs `./flowctl init` as lightweight setup inside the disposable workspace. Use `--no-openclaw` for a card-only benchmark run. Run `examples/flowops-airflow/scripts/reset-demo` when you need a full reset.
+The benchmark uses an isolated temporary evaluation log, runs real commands, and returns `0` only when every case passes. The FlowOps case runs `flowctl init` as lightweight setup inside the disposable workspace. Use `--no-openclaw` for a card-only benchmark run. Run `examples/flowops-airflow/scripts/reset-demo` when you need a full reset.
 
 ## Evaluation
 

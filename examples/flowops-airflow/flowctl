@@ -7,7 +7,14 @@ while [[ -L "${SOURCE}" ]]; do
   SOURCE="$(readlink "${SOURCE}")"
   [[ "${SOURCE}" != /* ]] && SOURCE="${SOURCE_DIR}/${SOURCE}"
 done
-ROOT_DIR="$(cd -P "$(dirname "${SOURCE}")" && pwd)"
+SCRIPT_ROOT="$(cd -P "$(dirname "${SOURCE}")" && pwd)"
+if [[ -n "${FLOWOPS_AIRFLOW_HOME:-}" ]]; then
+  ROOT_DIR="$(cd -P "${FLOWOPS_AIRFLOW_HOME}" && pwd)"
+elif [[ -f "${PWD}/docker-compose.yaml" && -d "${PWD}/dags" ]]; then
+  ROOT_DIR="$(pwd -P)"
+else
+  ROOT_DIR="${SCRIPT_ROOT}"
+fi
 COMPOSE_FILE="${ROOT_DIR}/docker-compose.yaml"
 
 usage() {
@@ -15,6 +22,8 @@ usage() {
 Usage:
   flowctl init
   flowctl check [dag_id]
+  flowctl source refresh <dag_id> --alias <missing=actual>
+  flowctl source reset [dag_id]
   flowctl airflow <args...>
   flowctl up
   flowctl down
@@ -23,6 +32,7 @@ Usage:
 Commands:
   init          Initialize the local Airflow metadata DB once.
   check         Run the real Airflow import-error check for a DAG.
+  source        Manage local FlowOps source bindings for the demo.
   airflow       Pass arguments to the real Airflow CLI in Docker Compose.
   up            Start local webserver and scheduler for inspection.
   down          Stop local services.
@@ -38,22 +48,115 @@ case "${command}" in
     ;;
 esac
 
-if docker compose version >/dev/null 2>&1; then
-  COMPOSE=(docker compose)
-elif command -v docker-compose >/dev/null 2>&1; then
-  COMPOSE=(docker-compose)
-else
-  echo "flowctl: Docker Compose is required. Install Docker Desktop or docker-compose." >&2
-  exit 127
-fi
+COMPOSE=()
+
+ensure_compose() {
+  if [[ "${#COMPOSE[@]}" -gt 0 ]]; then
+    return
+  fi
+  if docker compose version >/dev/null 2>&1; then
+    COMPOSE=(docker compose)
+  elif command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE=(docker-compose)
+  else
+    echo "flowctl: Docker Compose is required for this command. Install Docker Desktop or docker-compose." >&2
+    exit 127
+  fi
+}
 
 run_airflow() {
+  ensure_compose
   mkdir -p "${ROOT_DIR}/logs" "${ROOT_DIR}/plugins"
   touch "${ROOT_DIR}/airflow.db"
   chmod ugo+rw "${ROOT_DIR}/airflow.db"
   chmod ugo+rwx "${ROOT_DIR}/logs" "${ROOT_DIR}/plugins"
   "${COMPOSE[@]}" -f "${COMPOSE_FILE}" --profile cli run --rm airflow-cli -lc "airflow $*"
 }
+
+source_state_file() {
+  echo "${ROOT_DIR}/.flowops/source-aliases"
+}
+
+source_alias_present() {
+  local dag_id="$1"
+  local alias="$2"
+  local state_file
+  state_file="$(source_state_file)"
+  [[ -f "${state_file}" ]] && grep -Fxq "${dag_id} ${alias}" "${state_file}"
+}
+
+check_billing_export() {
+  if source_alias_present "billing_export_2026" "customer_segment=segment"; then
+    echo "FlowOps source binding OK: billing_export_2026 customer_segment -> segment"
+    echo "billing_export_2026 check passed"
+    return 0
+  fi
+
+  cat >&2 <<'ERROR'
+FlowOpsSourceError: billing_export_2026 source schema drift
+source snapshot: ods_billing_events_2026_05
+missing column: customer_segment
+owner: billing-platform
+hint: search internal FlowOps group for billing_export_2026 customer_segment source refresh
+ERROR
+  return 1
+}
+
+refresh_source() {
+  local dag_id="${1:-}"
+  shift || true
+  local alias=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --alias)
+        if [[ "$#" -lt 2 ]]; then
+          echo "flowctl source refresh: --alias requires <missing=actual>" >&2
+          exit 2
+        fi
+        alias="$2"
+        shift 2
+        ;;
+      *)
+        echo "flowctl source refresh: unknown argument: $1" >&2
+        exit 2
+        ;;
+    esac
+  done
+  if [[ -z "${dag_id}" || -z "${alias}" ]]; then
+    echo "Usage: flowctl source refresh <dag_id> --alias <missing=actual>" >&2
+    exit 2
+  fi
+  if [[ "${dag_id}" != "billing_export_2026" || "${alias}" != "customer_segment=segment" ]]; then
+    echo "FlowOpsSourceError: no test source binding matches ${dag_id} ${alias}" >&2
+    exit 1
+  fi
+  mkdir -p "${ROOT_DIR}/.flowops"
+  local state_file
+  state_file="$(source_state_file)"
+  if ! source_alias_present "${dag_id}" "${alias}"; then
+    echo "${dag_id} ${alias}" >> "${state_file}"
+  fi
+  echo "FlowOps source refreshed: ${dag_id} ${alias}"
+  echo "Next: flowctl check ${dag_id}"
+}
+
+reset_source() {
+  local dag_id="${1:-}"
+  local state_file
+  state_file="$(source_state_file)"
+  if [[ -z "${dag_id}" ]]; then
+    rm -f "${state_file}"
+    echo "FlowOps source bindings reset"
+    return
+  fi
+  if [[ -f "${state_file}" ]]; then
+    local tmp_file="${state_file}.tmp"
+    grep -Fv "${dag_id} " "${state_file}" > "${tmp_file}" || true
+    mv "${tmp_file}" "${state_file}"
+  fi
+  echo "FlowOps source binding reset: ${dag_id}"
+}
+
 case "${command}" in
   init)
     run_airflow "db migrate"
@@ -61,8 +164,30 @@ case "${command}" in
     ;;
   check)
     dag_id="${2:-billing_daily}"
-    run_airflow "dags list-import-errors"
-    run_airflow "dags show ${dag_id}"
+    if [[ "${dag_id}" == "billing_export_2026" ]]; then
+      check_billing_export
+    else
+      run_airflow "dags list-import-errors"
+      run_airflow "dags show ${dag_id}"
+    fi
+    ;;
+  source)
+    subcommand="${2:-}"
+    case "${subcommand}" in
+      refresh)
+        shift 2
+        refresh_source "$@"
+        ;;
+      reset)
+        shift 2
+        reset_source "$@"
+        ;;
+      *)
+        echo "Usage: flowctl source refresh <dag_id> --alias <missing=actual>" >&2
+        echo "       flowctl source reset [dag_id]" >&2
+        exit 2
+        ;;
+    esac
     ;;
   airflow)
     shift
@@ -73,15 +198,18 @@ case "${command}" in
     run_airflow "$*"
     ;;
   up)
+    ensure_compose
     "${COMPOSE[@]}" -f "${COMPOSE_FILE}" up -d airflow-webserver airflow-scheduler
     ;;
   down)
+    ensure_compose
     "${COMPOSE[@]}" -f "${COMPOSE_FILE}" down
     ;;
   clean)
+    ensure_compose
     "${COMPOSE[@]}" -f "${COMPOSE_FILE}" down --remove-orphans
     rm -f "${ROOT_DIR}/airflow.db" "${ROOT_DIR}/airflow.db-shm" "${ROOT_DIR}/airflow.db-wal" "${ROOT_DIR}/airflow.cfg"
-    rm -rf "${ROOT_DIR}/logs" "${ROOT_DIR}/plugins/__pycache__" "${ROOT_DIR}/tmp" "${ROOT_DIR}/.tmp"
+    rm -rf "${ROOT_DIR}/logs" "${ROOT_DIR}/plugins/__pycache__" "${ROOT_DIR}/tmp" "${ROOT_DIR}/.tmp" "${ROOT_DIR}/.flowops"
     ;;
   *)
     echo "flowctl: unknown command: ${command}" >&2

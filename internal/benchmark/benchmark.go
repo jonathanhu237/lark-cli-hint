@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"lark-cue/internal/card"
 	"lark-cue/internal/eval"
 	"lark-cue/internal/runner"
 )
@@ -197,9 +198,9 @@ func ScoreCase(c Case, observation Observation) CaseResult {
 		result.QueryCount = cue.QueryCount
 		result.LatencyMS = cue.LatencyMS
 		for _, source := range cue.Sources {
-			title := strings.TrimSpace(source.Title)
-			if title != "" {
-				result.CitedTitles = append(result.CitedTitles, title)
+			label := benchmarkSourceLabel(source)
+			if label != "" {
+				result.CitedTitles = append(result.CitedTitles, label)
 			}
 		}
 	}
@@ -226,6 +227,24 @@ func ScoreCase(c Case, observation Observation) CaseResult {
 	}
 	result.Passed = len(result.Failures) == 0
 	return result
+}
+
+func benchmarkSourceLabel(source card.Citation) string {
+	title := strings.TrimSpace(source.Title)
+	if title != "" {
+		return title
+	}
+	if source.Type == "im" {
+		chatName := strings.TrimSpace(source.ChatName)
+		if chatName != "" {
+			return chatName
+		}
+	}
+	id := strings.TrimSpace(source.ID)
+	if id != "" {
+		return id
+	}
+	return strings.TrimSpace(source.URL)
 }
 
 func Summarize(results []CaseResult, verbose bool) Summary {

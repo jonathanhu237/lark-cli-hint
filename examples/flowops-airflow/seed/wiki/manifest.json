@@ -1,10 +1,28 @@
 {
   "wiki_name": "星桥科技 FlowOps 知识库",
   "description": "星桥科技 FlowOps 调度平台内部知识库，收录发布、巡检、排障与复盘资料。",
+  "im_chat_name": "星桥科技 FlowOps 排障演示群",
   "smoke_queries": [
     "billing_daily",
+    "billing_export_2026",
+    "customer_segment",
+    "schema drift",
     "FlowOps DAG",
     "FlowOps DAG 开发规范"
+  ],
+  "im_messages": [
+    {
+      "id": "billing-export-2026-schema-drift-001",
+      "text": "张三：今天 billing_export_2026 的 FlowOpsSourceError 不是 DAG 代码问题，ods_billing_events_2026_05 把 customer_segment 临时改名成 segment。不要改 DAG。"
+    },
+    {
+      "id": "billing-export-2026-schema-drift-002",
+      "text": "李四：处理顺序是先执行 flowctl source refresh billing_export_2026 --alias customer_segment=segment，然后重新执行 flowctl check billing_export_2026。数据平台会在 18:00 前补正式 schema alias。"
+    },
+    {
+      "id": "billing-export-2026-schema-drift-003",
+      "text": "王五：如果 billing_export_2026 仍然报 source schema drift，先看 source binding，不要直接改 export_billing_snapshot 的 DAG 逻辑。"
+    }
   ],
   "pages": [
     {
@@ -22,6 +40,10 @@
             {
               "title": "FlowOps DAG 开发规范",
               "file": "FlowOps DAG 开发规范.md"
+            },
+            {
+              "title": "FlowOps Source Schema Drift 排障 FAQ",
+              "file": "FlowOps Source Schema Drift 排障 FAQ.md"
             }
           ]
         },

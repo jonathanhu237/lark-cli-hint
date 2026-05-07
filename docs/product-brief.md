@@ -67,7 +67,7 @@ Current retrieval routes:
 - Docs/Wiki/Sheets through `lark-cli docs +search`
 - IM through `lark-cli im +messages-search`
 
-The FlowOps seed creates or reuses a complete team Wiki from a repository manifest and Markdown files. IM retrieval remains enabled for real tenants and future seeded group discussions.
+The FlowOps seed creates or reuses a complete team Wiki from a repository manifest and Markdown files. It also sends controlled seed messages to a configured test chat so the `billing_export_2026` source schema drift scenario can demonstrate IM retrieval for fresh operational conclusions.
 
 ## lark-cli Role
 

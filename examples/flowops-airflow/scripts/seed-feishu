@@ -32,6 +32,8 @@ def main() -> int:
         config = load_seed_config()
         profile = first_non_empty(args.profile, config.get("feishu_profile", ""))
         wiki_name = first_non_empty(args.wiki_name, config.get("wiki_name", ""), manifest["wiki_name"])
+        im_chat = first_non_empty(args.im_chat, config.get("im_chat", ""), manifest.get("im_chat_name", ""))
+        im_chat_id = first_non_empty(args.im_chat_id, config.get("im_chat_id", ""))
 
         if args.apply and not profile:
             raise SeedError("--apply requires a seed Feishu profile from --profile or ~/.lark-cue/config.toml [seed].feishu_profile")
@@ -40,9 +42,9 @@ def main() -> int:
 
         if args.apply:
             require_lark_cli()
-            apply_manifest(args, manifest, manifest_path.parent, profile, wiki_name)
+            apply_manifest(args, manifest, manifest_path.parent, profile, wiki_name, im_chat, im_chat_id)
         else:
-            dry_run(args, manifest, manifest_path.parent, profile, wiki_name)
+            dry_run(args, manifest, manifest_path.parent, profile, wiki_name, im_chat, im_chat_id)
         return 0
     except SeedError as err:
         print(str(err), file=sys.stderr)
@@ -61,6 +63,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--apply", action="store_true", help="Create or update the FlowOps demo team Wiki.")
     parser.add_argument("--profile", help="Seed/test lark-cli profile. Overrides [seed].feishu_profile.")
     parser.add_argument("--wiki-name", help="Team Wiki name. Overrides [seed].wiki_name and manifest wiki_name.")
+    parser.add_argument("--im-chat", help="Exact test chat name for IM seed messages. Overrides [seed].im_chat and manifest im_chat_name.")
+    parser.add_argument("--im-chat-id", help="Test chat ID (oc_xxx) for IM seed messages. Overrides chat-name resolution.")
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST), help="Path to the FlowOps Wiki seed manifest.")
     parser.add_argument("--as", dest="identity", choices=("user", "bot"), default="user", help="Identity for Feishu writes. Default: user.")
     return parser.parse_args()
@@ -83,6 +87,8 @@ def load_seed_config() -> dict:
     return {
         "feishu_profile": str(seed.get("feishu_profile", "")).strip(),
         "wiki_name": str(seed.get("wiki_name", "")).strip(),
+        "im_chat": str(seed.get("im_chat", "")).strip(),
+        "im_chat_id": str(seed.get("im_chat_id", "")).strip(),
     }
 
 
@@ -103,6 +109,8 @@ def load_seed_config_fallback(config_path: Path) -> dict:
     return {
         "feishu_profile": values.get("feishu_profile", "").strip(),
         "wiki_name": values.get("wiki_name", "").strip(),
+        "im_chat": values.get("im_chat", "").strip(),
+        "im_chat_id": values.get("im_chat_id", "").strip(),
     }
 
 
@@ -125,10 +133,36 @@ def load_manifest(path: Path) -> dict:
     smoke_queries = manifest.get("smoke_queries", [])
     if not isinstance(smoke_queries, list):
         raise SeedError("manifest smoke_queries must be an array when present")
+    im_messages = manifest.get("im_messages", [])
+    if im_messages is None:
+        im_messages = []
+    if not isinstance(im_messages, list):
+        raise SeedError("manifest im_messages must be an array when present")
+    validate_im_messages(im_messages)
     manifest["wiki_name"] = wiki_name
     manifest["description"] = str(manifest.get("description", "")).strip()
+    manifest["im_chat_name"] = str(manifest.get("im_chat_name", "")).strip()
+    manifest["im_messages"] = im_messages
     manifest["smoke_queries"] = [str(query).strip() for query in smoke_queries if str(query).strip()]
     return manifest
+
+
+def validate_im_messages(messages: list) -> None:
+    seen = set()
+    for i, message in enumerate(messages):
+        if not isinstance(message, dict):
+            raise SeedError("manifest im_messages entries must be objects")
+        key = str(message.get("id", "")).strip()
+        text = str(message.get("text", "")).strip()
+        if not key:
+            raise SeedError(f"im_messages[{i}] id is required")
+        if key in seen:
+            raise SeedError(f"duplicate im message id: {key}")
+        if not text:
+            raise SeedError(f"im_messages[{i}] text is required")
+        if "[lark-cue-demo]" in text or "seed-managed" in text.lower():
+            raise SeedError(f"im_messages[{i}] exposes demo/seed marker")
+        seen.add(key)
 
 
 def validate_pages(pages: list, base_dir: Path) -> None:
@@ -177,12 +211,14 @@ def first_non_empty(*values: str) -> str:
     return ""
 
 
-def dry_run(args: argparse.Namespace, manifest: dict, base_dir: Path, profile: str, wiki_name: str) -> None:
+def dry_run(args: argparse.Namespace, manifest: dict, base_dir: Path, profile: str, wiki_name: str, im_chat: str, im_chat_id: str) -> None:
     display_profile = profile or "<seed-profile required for --apply>"
     print("FlowOps Feishu demo seed")
     print("Mode: dry-run. No Feishu writes will be performed.")
     print(f"Profile: {display_profile}")
     print(f"Wiki: {wiki_name}")
+    if manifest.get("im_messages"):
+        print(f"IM chat: {im_chat_id or im_chat or '<seed im_chat required for --apply>'}")
     print()
     print("[dry-run] would find or create team Wiki:")
     print_command(profile, ["wiki", "spaces", "list", "--params", '{"page_size":50}', "--format", "json", "--as", args.identity])
@@ -192,15 +228,27 @@ def dry_run(args: argparse.Namespace, manifest: dict, base_dir: Path, profile: s
     for page_path, page in flatten_pages(manifest["pages"]):
         filename = page["file"]
         print(f"- {' / '.join(page_path)} <- {base_dir / filename}")
+    if manifest.get("im_messages"):
+        print()
+        print("[dry-run] would resolve test chat and send IM seed messages:")
+        if im_chat_id:
+            print(f"- chat id: {im_chat_id}")
+        else:
+            print_command(profile, ["im", "+chat-search", "--query", im_chat or "<exact-chat-name>", "--disable-search-by-user", "--page-size", "5", "--format", "json", "--as", "user"])
+            print_command(profile, ["im", "+chat-create", "--as", "user", "--type", "private", "--name", im_chat or "<exact-chat-name>", "--description", "FlowOps demo troubleshooting chat", "--format", "json"])
+        for message in manifest["im_messages"]:
+            print(f"- {message['id']}: {message['text']}")
     print()
     print_smoke_commands(profile, manifest)
 
 
-def apply_manifest(args: argparse.Namespace, manifest: dict, base_dir: Path, profile: str, wiki_name: str) -> None:
+def apply_manifest(args: argparse.Namespace, manifest: dict, base_dir: Path, profile: str, wiki_name: str, im_chat: str, im_chat_id: str) -> None:
     print("FlowOps Feishu demo seed")
     print("Mode: apply. Lark docs may be created, updated, or moved in the target team Wiki.")
     print(f"Profile: {profile}")
     print(f"Wiki: {wiki_name}")
+    if manifest.get("im_messages"):
+        print(f"IM chat: {im_chat_id or im_chat or '<not configured>'}")
     print()
 
     client = LarkClient(profile=profile, identity=args.identity)
@@ -214,9 +262,45 @@ def apply_manifest(args: argparse.Namespace, manifest: dict, base_dir: Path, pro
 
     for page in manifest["pages"]:
         apply_page(client, space_id, base_dir, page, parent_token="", path=())
+    apply_im_messages(client, manifest, im_chat, im_chat_id)
 
     print()
     print_smoke_commands(profile, manifest)
+
+
+def apply_im_messages(client: "LarkClient", manifest: dict, im_chat: str, im_chat_id: str) -> None:
+    messages = manifest.get("im_messages") or []
+    if not messages:
+        return
+    chat_id = resolve_im_chat(client, im_chat, im_chat_id)
+    print(f"Using IM chat: {im_chat or chat_id} ({chat_id})")
+    for message in messages:
+        key = "flowops-demo-" + str(message["id"]).strip()
+        text = str(message["text"]).strip()
+        if client.message_exists(chat_id, text):
+            print(f"[apply] reuse IM seed message: {message['id']}")
+            continue
+        print(f"[apply] send IM seed message: {message['id']}")
+        client.send_message(chat_id, text, key)
+
+
+def resolve_im_chat(client: "LarkClient", im_chat: str, im_chat_id: str) -> str:
+    if im_chat_id:
+        return im_chat_id
+    if not im_chat:
+        raise SeedError("IM seed messages require --im-chat, --im-chat-id, [seed].im_chat, or manifest im_chat_name")
+    matches = []
+    for chat in client.search_chats(im_chat):
+        if str(chat.get("name", "")).strip() == im_chat:
+            chat_id = str(chat.get("chat_id", "")).strip()
+            if chat_id:
+                matches.append(chat_id)
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise SeedError(f"multiple IM chats exactly matched {im_chat}; use --im-chat-id")
+    print(f"[apply] create IM chat: {im_chat}")
+    return client.create_chat(im_chat)
 
 
 def space_payload(wiki_name: str, manifest: dict) -> dict:
@@ -304,6 +388,8 @@ def print_smoke_commands(profile: str, manifest: dict) -> None:
     for query in manifest.get("smoke_queries", []):
         cmd = ["lark-cli", "--profile", display_profile, "docs", "+search", "--query", query, "--page-size", "10", "--format", "pretty"]
         print("  " + shlex.join(cmd))
+        im_cmd = ["lark-cli", "--profile", display_profile, "im", "+messages-search", "--query", query, "--page-size", "10", "--format", "pretty"]
+        print("  " + shlex.join(im_cmd))
 
 
 def print_command(profile: str, args: list[str]) -> None:
@@ -420,6 +506,92 @@ class LarkClient:
         if parent_token:
             args.extend(["--target-parent-token", parent_token])
         self.run_json(args)
+
+    def search_chats(self, name: str) -> list[dict]:
+        data = self.run_json(["im", "+chat-search", "--query", name, "--disable-search-by-user", "--page-size", "5", "--format", "json", "--as", "user"])
+        body = data.get("data", {})
+        for key in ("items", "chats", "groups"):
+            values = body.get(key) if isinstance(body, dict) else None
+            if isinstance(values, list):
+                return [item for item in values if isinstance(item, dict)]
+        return []
+
+    def create_chat(self, name: str) -> str:
+        data = self.run_json([
+            "im",
+            "+chat-create",
+            "--as",
+            "user",
+            "--type",
+            "private",
+            "--name",
+            name,
+            "--description",
+            "FlowOps demo troubleshooting chat",
+            "--format",
+            "json",
+        ])
+        body = data.get("data", {})
+        chat = body.get("chat") if isinstance(body, dict) else {}
+        chat_id = first_non_empty(
+            body.get("chat_id", "") if isinstance(body, dict) else "",
+            chat.get("chat_id", "") if isinstance(chat, dict) else "",
+            data.get("chat_id", ""),
+        )
+        if not chat_id:
+            raise SeedError(f"im +chat-create did not return chat_id for {name}")
+        return chat_id
+
+    def send_message(self, chat_id: str, text: str, idempotency_key: str) -> None:
+        self.run_json([
+            "im",
+            "+messages-send",
+            "--as",
+            "user",
+            "--chat-id",
+            chat_id,
+            "--text",
+            text,
+            "--idempotency-key",
+            idempotency_key,
+        ])
+
+    def message_exists(self, chat_id: str, text: str) -> bool:
+        query = im_dedupe_query(text)
+        data = self.run_json([
+            "im",
+            "+messages-search",
+            "--query",
+            query,
+            "--chat-id",
+            chat_id,
+            "--page-size",
+            "10",
+            "--format",
+            "json",
+            "--as",
+            "user",
+        ])
+        body = data.get("data", {})
+        messages = body.get("messages") if isinstance(body, dict) else []
+        if not isinstance(messages, list):
+            return False
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            content = str(message.get("content", ""))
+            if text in content:
+                return True
+        return False
+
+
+def im_dedupe_query(text: str) -> str:
+    compact = " ".join(text.split())
+    if "billing_export_2026" in compact and "customer_segment" in compact:
+        return "billing_export_2026 customer_segment"
+    if "source schema drift" in compact:
+        return "source schema drift"
+    return compact[:48]
 
 
 if __name__ == "__main__":
