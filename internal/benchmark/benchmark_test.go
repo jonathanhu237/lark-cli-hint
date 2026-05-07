@@ -101,8 +101,8 @@ func TestFlowOpsEvalCasesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCases FlowOps eval cases error: %v", err)
 	}
-	if len(cases) != 2 {
-		t.Fatalf("FlowOps cases len = %d, want 2", len(cases))
+	if len(cases) != 3 {
+		t.Fatalf("FlowOps cases len = %d, want 3", len(cases))
 	}
 	got := cases[0]
 	if got.Command[0] != "flowctl" || !got.ExpectFailure || got.MinExpectedHits != 1 {
@@ -111,6 +111,10 @@ func TestFlowOpsEvalCasesLoad(t *testing.T) {
 	imCase := cases[1]
 	if imCase.ID != "flowops-billing-export-source-schema-drift" || imCase.Command[2] != "billing_export_2026" {
 		t.Fatalf("unexpected FlowOps IM case: %+v", imCase)
+	}
+	semanticCase := cases[2]
+	if semanticCase.ID != "flowops-orders-reconcile-watermark-lag" || semanticCase.Command[2] != "orders_reconcile_2026" {
+		t.Fatalf("unexpected FlowOps semantic case: %+v", semanticCase)
 	}
 }
 

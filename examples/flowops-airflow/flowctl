@@ -22,6 +22,8 @@ usage() {
 Usage:
   flowctl init
   flowctl check [dag_id]
+  flowctl dataset backfill <dag_id> --date <yyyy-mm-dd>
+  flowctl dataset reset [dag_id]
   flowctl source refresh <dag_id> --alias <missing=actual>
   flowctl source reset [dag_id]
   flowctl airflow <args...>
@@ -32,6 +34,7 @@ Usage:
 Commands:
   init          Initialize the local Airflow metadata DB once.
   check         Run the real Airflow import-error check for a DAG.
+  dataset       Manage local FlowOps dataset freshness state for the demo.
   source        Manage local FlowOps source bindings for the demo.
   airflow       Pass arguments to the real Airflow CLI in Docker Compose.
   up            Start local webserver and scheduler for inspection.
@@ -77,12 +80,59 @@ source_state_file() {
   echo "${ROOT_DIR}/.flowops/source-aliases"
 }
 
+flowops_state_dir() {
+  echo "${ROOT_DIR}/.flowops"
+}
+
+marker_file() {
+  local scenario="$1"
+  echo "$(flowops_state_dir)/${scenario}.ok"
+}
+
+marker_present() {
+  local scenario="$1"
+  [[ -f "$(marker_file "${scenario}")" ]]
+}
+
+mark_scenario() {
+  local scenario="$1"
+  mkdir -p "$(flowops_state_dir)"
+  : > "$(marker_file "${scenario}")"
+}
+
+reset_marker() {
+  local scenario="${1:-}"
+  if [[ -z "${scenario}" ]]; then
+    rm -f "$(flowops_state_dir)"/*.ok 2>/dev/null || true
+    return
+  fi
+  rm -f "$(marker_file "${scenario}")"
+}
+
 source_alias_present() {
   local dag_id="$1"
   local alias="$2"
   local state_file
   state_file="$(source_state_file)"
   [[ -f "${state_file}" ]] && grep -Fxq "${dag_id} ${alias}" "${state_file}"
+}
+
+check_orders_reconcile() {
+  if marker_present "orders_reconcile_2026"; then
+    echo "FlowOps dataset freshness OK: orders_reconcile_2026 partition ds=2026-05-06 is ready"
+    echo "orders_reconcile_2026 check passed"
+    return 0
+  fi
+
+  cat >&2 <<'ERROR'
+FlowOpsFreshnessError: orders_reconcile_2026 input watermark is 7h behind
+dataset: dwd_orders_snapshot
+expected window: ds=2026-05-06 23:00+08:00
+observed watermark: 2026-05-06 16:00+08:00
+owner: data-ingestion
+hint: search internal FlowOps knowledge for late watermark or delayed partition handling
+ERROR
+  return 1
 }
 
 check_billing_export() {
@@ -100,6 +150,49 @@ owner: billing-platform
 hint: search internal FlowOps group for billing_export_2026 customer_segment source refresh
 ERROR
   return 1
+}
+
+backfill_dataset() {
+  local dag_id="${1:-}"
+  shift || true
+  local date=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --date)
+        if [[ "$#" -lt 2 ]]; then
+          echo "flowctl dataset backfill: --date requires yyyy-mm-dd" >&2
+          exit 2
+        fi
+        date="$2"
+        shift 2
+        ;;
+      *)
+        echo "flowctl dataset backfill: unknown argument: $1" >&2
+        exit 2
+        ;;
+    esac
+  done
+  if [[ "${dag_id}" != "orders_reconcile_2026" || "${date}" != "2026-05-06" ]]; then
+    echo "FlowOpsFreshnessError: no test dataset backfill matches ${dag_id} ${date}" >&2
+    exit 1
+  fi
+  mark_scenario "orders_reconcile_2026"
+  echo "FlowOps dataset backfill marked ready: ${dag_id} ds=${date}"
+  echo "Next: flowctl check ${dag_id}"
+}
+
+reset_dataset() {
+  local dag_id="${1:-}"
+  case "${dag_id}" in
+    ""|"orders_reconcile_2026")
+      reset_marker "orders_reconcile_2026"
+      echo "FlowOps dataset freshness reset: ${dag_id:-all}"
+      ;;
+    *)
+      echo "flowctl dataset reset: unknown demo dag ${dag_id}" >&2
+      exit 2
+      ;;
+  esac
 }
 
 refresh_source() {
@@ -164,12 +257,36 @@ case "${command}" in
     ;;
   check)
     dag_id="${2:-billing_daily}"
-    if [[ "${dag_id}" == "billing_export_2026" ]]; then
-      check_billing_export
-    else
-      run_airflow "dags list-import-errors"
-      run_airflow "dags show ${dag_id}"
-    fi
+    case "${dag_id}" in
+      billing_export_2026)
+        check_billing_export
+        ;;
+      orders_reconcile_2026)
+        check_orders_reconcile
+        ;;
+      *)
+        run_airflow "dags list-import-errors"
+        run_airflow "dags show ${dag_id}"
+        ;;
+    esac
+    ;;
+  dataset)
+    subcommand="${2:-}"
+    case "${subcommand}" in
+      backfill)
+        shift 2
+        backfill_dataset "$@"
+        ;;
+      reset)
+        shift 2
+        reset_dataset "$@"
+        ;;
+      *)
+        echo "Usage: flowctl dataset backfill <dag_id> --date <yyyy-mm-dd>" >&2
+        echo "       flowctl dataset reset [dag_id]" >&2
+        exit 2
+        ;;
+    esac
     ;;
   source)
     subcommand="${2:-}"

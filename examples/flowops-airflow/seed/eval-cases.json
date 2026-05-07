@@ -26,6 +26,18 @@
         "星桥科技 FlowOps 排障演示群"
       ],
       "min_expected_hits": 1
+    },
+    {
+      "id": "flowops-orders-reconcile-watermark-lag",
+      "setup": [
+        ["flowctl", "dataset", "reset", "orders_reconcile_2026"]
+      ],
+      "command": ["flowctl", "check", "orders_reconcile_2026"],
+      "expect_failure": true,
+      "expected_sources": [
+        "FlowOps Dataset Freshness 排障 FAQ"
+      ],
+      "min_expected_hits": 1
     }
   ]
 }

@@ -7,6 +7,8 @@
     "billing_export_2026",
     "customer_segment",
     "schema drift",
+    "orders_reconcile_2026",
+    "watermark lag",
     "FlowOps DAG",
     "FlowOps DAG 开发规范"
   ],
@@ -44,6 +46,10 @@
             {
               "title": "FlowOps Source Schema Drift 排障 FAQ",
               "file": "FlowOps Source Schema Drift 排障 FAQ.md"
+            },
+            {
+              "title": "FlowOps Dataset Freshness 排障 FAQ",
+              "file": "FlowOps Dataset Freshness 排障 FAQ.md"
             }
           ]
         },
