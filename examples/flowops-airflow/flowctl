@@ -28,6 +28,8 @@ Usage:
   flowctl dataset reset [dag_id]
   flowctl feature override <dag_id> --flag <id> --cohort <name>
   flowctl feature reset [dag_id]
+  flowctl governance approve <dag_id> --policy <id> --ticket <id>
+  flowctl governance reset [dag_id]
   flowctl network allow <dag_id> --service <host> --profile <name>
   flowctl network reset [dag_id]
   flowctl quota claim <dag_id> --bucket <name> --mode <mode>
@@ -47,6 +49,7 @@ Commands:
   capacity      Manage local FlowOps capacity state for the demo.
   dataset       Manage local FlowOps dataset freshness state for the demo.
   feature       Manage local FlowOps feature gate state for the demo.
+  governance    Manage local FlowOps data governance state for the demo.
   network       Manage local FlowOps egress state for the demo.
   quota         Manage local FlowOps quota state for the demo.
   secrets       Manage local FlowOps secret state for the demo.
@@ -238,6 +241,24 @@ ERROR
   return 1
 }
 
+check_customer360_pii() {
+  if marker_present "customer360_pii_governance"; then
+    echo "FlowOps governance OK: customer360_pii policy=PII-DLP-17 ticket=PRIV-2049"
+    echo "customer360_pii check passed"
+    return 0
+  fi
+
+  cat >&2 <<'ERROR'
+FlowOpsGovernanceBlock: customer360_pii export blocked by data policy
+policy: PII-DLP-17
+field: ssn_hash
+approval state: missing privacy review
+owner: data-governance
+hint: search internal FlowOps knowledge for PII approval or privacy review ticket
+ERROR
+  return 1
+}
+
 check_billing_export() {
   if source_alias_present "billing_export_2026" "customer_segment=segment"; then
     echo "FlowOps source binding OK: billing_export_2026 customer_segment -> segment"
@@ -406,6 +427,58 @@ reset_network() {
       ;;
     *)
       echo "flowctl network reset: unknown demo dag ${dag_id}" >&2
+      exit 2
+      ;;
+  esac
+}
+
+approve_governance() {
+  local dag_id="${1:-}"
+  shift || true
+  local policy=""
+  local ticket=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --policy)
+        if [[ "$#" -lt 2 ]]; then
+          echo "flowctl governance approve: --policy requires an id" >&2
+          exit 2
+        fi
+        policy="$2"
+        shift 2
+        ;;
+      --ticket)
+        if [[ "$#" -lt 2 ]]; then
+          echo "flowctl governance approve: --ticket requires an id" >&2
+          exit 2
+        fi
+        ticket="$2"
+        shift 2
+        ;;
+      *)
+        echo "flowctl governance approve: unknown argument: $1" >&2
+        exit 2
+        ;;
+    esac
+  done
+  if [[ "${dag_id}" != "customer360_pii" || "${policy}" != "PII-DLP-17" || "${ticket}" != "PRIV-2049" ]]; then
+    echo "FlowOpsGovernanceBlock: no test governance approval matches ${dag_id} ${policy} ${ticket}" >&2
+    exit 1
+  fi
+  mark_scenario "customer360_pii_governance"
+  echo "FlowOps governance approval recorded: ${dag_id} policy=${policy} ticket=${ticket}"
+  echo "Next: flowctl check ${dag_id}"
+}
+
+reset_governance() {
+  local dag_id="${1:-}"
+  case "${dag_id}" in
+    ""|"customer360_pii")
+      reset_marker "customer360_pii_governance"
+      echo "FlowOps governance state reset: ${dag_id:-all}"
+      ;;
+    *)
+      echo "flowctl governance reset: unknown demo dag ${dag_id}" >&2
       exit 2
       ;;
   esac
@@ -642,6 +715,9 @@ case "${command}" in
       crm_sync)
         check_crm_sync
         ;;
+      customer360_pii)
+        check_customer360_pii
+        ;;
       *)
         run_airflow "dags list-import-errors"
         run_airflow "dags show ${dag_id}"
@@ -698,6 +774,24 @@ case "${command}" in
       *)
         echo "Usage: flowctl feature override <dag_id> --flag <id> --cohort <name>" >&2
         echo "       flowctl feature reset [dag_id]" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  governance)
+    subcommand="${2:-}"
+    case "${subcommand}" in
+      approve)
+        shift 2
+        approve_governance "$@"
+        ;;
+      reset)
+        shift 2
+        reset_governance "$@"
+        ;;
+      *)
+        echo "Usage: flowctl governance approve <dag_id> --policy <id> --ticket <id>" >&2
+        echo "       flowctl governance reset [dag_id]" >&2
         exit 2
         ;;
     esac

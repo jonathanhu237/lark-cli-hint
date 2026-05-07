@@ -106,8 +106,8 @@ func TestFlowOpsEvalCasesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCases FlowOps eval cases error: %v", err)
 	}
-	if len(cases) != 8 {
-		t.Fatalf("FlowOps cases len = %d, want 8", len(cases))
+	if len(cases) != 9 {
+		t.Fatalf("FlowOps cases len = %d, want 9", len(cases))
 	}
 	got := cases[0]
 	if got.Command[0] != "flowctl" || !got.ExpectFailure || got.MinExpectedHits != 1 {
@@ -140,6 +140,10 @@ func TestFlowOpsEvalCasesLoad(t *testing.T) {
 	networkCase := cases[7]
 	if networkCase.ID != "flowops-crm-sync-egress-allowlist" || networkCase.Command[2] != "crm_sync" {
 		t.Fatalf("unexpected FlowOps network case: %+v", networkCase)
+	}
+	governanceCase := cases[8]
+	if governanceCase.ID != "flowops-customer360-pii-governance" || governanceCase.Command[2] != "customer360_pii" {
+		t.Fatalf("unexpected FlowOps governance case: %+v", governanceCase)
 	}
 }
 

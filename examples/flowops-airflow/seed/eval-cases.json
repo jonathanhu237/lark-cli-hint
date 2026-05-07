@@ -110,6 +110,22 @@
         "revenue-egress"
       ],
       "min_expected_hits": 1
+    },
+    {
+      "id": "flowops-customer360-pii-governance",
+      "setup": [
+        ["flowctl", "governance", "reset", "customer360_pii"]
+      ],
+      "command": ["flowctl", "check", "customer360_pii"],
+      "expect_failure": true,
+      "expected_sources": [
+        "FlowOps Data Governance 排障 FAQ"
+      ],
+      "expected_evidence_terms": [
+        "PII-DLP-17",
+        "PRIV-2049"
+      ],
+      "min_expected_hits": 1
     }
   ]
 }

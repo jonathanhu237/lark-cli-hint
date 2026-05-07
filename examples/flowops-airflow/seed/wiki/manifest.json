@@ -23,6 +23,9 @@
     "crm_sync",
     "crm.internal.svc",
     "egress allowlist",
+    "customer360_pii",
+    "PII-DLP-17",
+    "privacy review",
     "FlowOps DAG",
     "FlowOps DAG 开发规范"
   ],
@@ -88,6 +91,10 @@
             {
               "title": "FlowOps Egress Allowlist 排障 FAQ",
               "file": "FlowOps Egress Allowlist 排障 FAQ.md"
+            },
+            {
+              "title": "FlowOps Data Governance 排障 FAQ",
+              "file": "FlowOps Data Governance 排障 FAQ.md"
             }
           ]
         },
