@@ -28,6 +28,8 @@ Usage:
   flowctl dataset reset [dag_id]
   flowctl feature override <dag_id> --flag <id> --cohort <name>
   flowctl feature reset [dag_id]
+  flowctl network allow <dag_id> --service <host> --profile <name>
+  flowctl network reset [dag_id]
   flowctl quota claim <dag_id> --bucket <name> --mode <mode>
   flowctl quota reset [dag_id]
   flowctl secrets renew <dag_id> --secret <name> --epoch <epoch>
@@ -45,6 +47,7 @@ Commands:
   capacity      Manage local FlowOps capacity state for the demo.
   dataset       Manage local FlowOps dataset freshness state for the demo.
   feature       Manage local FlowOps feature gate state for the demo.
+  network       Manage local FlowOps egress state for the demo.
   quota         Manage local FlowOps quota state for the demo.
   secrets       Manage local FlowOps secret state for the demo.
   source        Manage local FlowOps source bindings for the demo.
@@ -218,6 +221,23 @@ ERROR
   return 1
 }
 
+check_crm_sync() {
+  if marker_present "crm_sync_network"; then
+    echo "FlowOps egress OK: crm_sync crm.internal.svc profile=revenue-egress"
+    echo "crm_sync check passed"
+    return 0
+  fi
+
+  cat >&2 <<'ERROR'
+FlowOpsEgressDenied: crm_sync cannot reach crm.internal.svc:443
+egress profile: default-deny
+connection: tls handshake timeout during customer delta pull
+owner: revenue-ops
+hint: search internal FlowOps knowledge for network allowlist or service endpoint approval
+ERROR
+  return 1
+}
+
 check_billing_export() {
   if source_alias_present "billing_export_2026" "customer_segment=segment"; then
     echo "FlowOps source binding OK: billing_export_2026 customer_segment -> segment"
@@ -334,6 +354,58 @@ reset_quota() {
       ;;
     *)
       echo "flowctl quota reset: unknown demo dag ${dag_id}" >&2
+      exit 2
+      ;;
+  esac
+}
+
+allow_network() {
+  local dag_id="${1:-}"
+  shift || true
+  local service=""
+  local profile=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --service)
+        if [[ "$#" -lt 2 ]]; then
+          echo "flowctl network allow: --service requires a host" >&2
+          exit 2
+        fi
+        service="$2"
+        shift 2
+        ;;
+      --profile)
+        if [[ "$#" -lt 2 ]]; then
+          echo "flowctl network allow: --profile requires a name" >&2
+          exit 2
+        fi
+        profile="$2"
+        shift 2
+        ;;
+      *)
+        echo "flowctl network allow: unknown argument: $1" >&2
+        exit 2
+        ;;
+    esac
+  done
+  if [[ "${dag_id}" != "crm_sync" || "${service}" != "crm.internal.svc" || "${profile}" != "revenue-egress" ]]; then
+    echo "FlowOpsEgressDenied: no test network allowlist matches ${dag_id} ${service} ${profile}" >&2
+    exit 1
+  fi
+  mark_scenario "crm_sync_network"
+  echo "FlowOps network allowlist applied: ${dag_id} service=${service} profile=${profile}"
+  echo "Next: flowctl check ${dag_id}"
+}
+
+reset_network() {
+  local dag_id="${1:-}"
+  case "${dag_id}" in
+    ""|"crm_sync")
+      reset_marker "crm_sync_network"
+      echo "FlowOps network state reset: ${dag_id:-all}"
+      ;;
+    *)
+      echo "flowctl network reset: unknown demo dag ${dag_id}" >&2
       exit 2
       ;;
   esac
@@ -567,6 +639,9 @@ case "${command}" in
       payment_settlement)
         check_payment_settlement
         ;;
+      crm_sync)
+        check_crm_sync
+        ;;
       *)
         run_airflow "dags list-import-errors"
         run_airflow "dags show ${dag_id}"
@@ -623,6 +698,24 @@ case "${command}" in
       *)
         echo "Usage: flowctl feature override <dag_id> --flag <id> --cohort <name>" >&2
         echo "       flowctl feature reset [dag_id]" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  network)
+    subcommand="${2:-}"
+    case "${subcommand}" in
+      allow)
+        shift 2
+        allow_network "$@"
+        ;;
+      reset)
+        shift 2
+        reset_network "$@"
+        ;;
+      *)
+        echo "Usage: flowctl network allow <dag_id> --service <host> --profile <name>" >&2
+        echo "       flowctl network reset [dag_id]" >&2
         exit 2
         ;;
     esac

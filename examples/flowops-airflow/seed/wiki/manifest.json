@@ -20,6 +20,9 @@
     "payment_settlement",
     "partner_api_v2",
     "HTTP 429",
+    "crm_sync",
+    "crm.internal.svc",
+    "egress allowlist",
     "FlowOps DAG",
     "FlowOps DAG 开发规范"
   ],
@@ -81,6 +84,10 @@
             {
               "title": "FlowOps Partner Quota 排障 FAQ",
               "file": "FlowOps Partner Quota 排障 FAQ.md"
+            },
+            {
+              "title": "FlowOps Egress Allowlist 排障 FAQ",
+              "file": "FlowOps Egress Allowlist 排障 FAQ.md"
             }
           ]
         },

@@ -94,6 +94,22 @@
         "replay-window"
       ],
       "min_expected_hits": 1
+    },
+    {
+      "id": "flowops-crm-sync-egress-allowlist",
+      "setup": [
+        ["flowctl", "network", "reset", "crm_sync"]
+      ],
+      "command": ["flowctl", "check", "crm_sync"],
+      "expect_failure": true,
+      "expected_sources": [
+        "FlowOps Egress Allowlist 排障 FAQ"
+      ],
+      "expected_evidence_terms": [
+        "crm.internal.svc",
+        "revenue-egress"
+      ],
+      "min_expected_hits": 1
     }
   ]
 }
