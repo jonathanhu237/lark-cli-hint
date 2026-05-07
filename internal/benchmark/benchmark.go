@@ -69,6 +69,7 @@ type Summary struct {
 	ExpectedCitationHits    int
 	TotalCitations          int
 	AverageLatencyMS        float64
+	Jobs                    int
 	Results                 []CaseResult
 	Verbose                 bool
 }
@@ -327,41 +328,12 @@ func RenderSummary(summary Summary) string {
 	var b strings.Builder
 	b.WriteString("lark-cue benchmark report\n\n")
 	b.WriteString("Summary\n")
-	fmt.Fprintf(&b, "- cases: %d/%d passed\n", summary.PassedCases, summary.TotalCases)
-	fmt.Fprintf(&b, "- expected-source hit rate: %d/%d\n", summary.ExpectedSourceHitCases, summary.TotalCases)
-	fmt.Fprintf(&b, "- source coverage: %d/%d\n", summary.DistinctMatchedSources, summary.DistinctExpectedSources)
-	fmt.Fprintf(&b, "- citation precision: %d/%d\n", summary.ExpectedCitationHits, summary.TotalCitations)
-	fmt.Fprintf(&b, "- avg latency: %.0fms\n", summary.AverageLatencyMS)
+	for _, line := range summaryMetricLines(summary) {
+		fmt.Fprintf(&b, "- %s\n", line)
+	}
 	b.WriteString("\nCases\n")
 	for _, result := range summary.Results {
-		status := "FAIL"
-		if result.Passed {
-			status = "PASS"
-		}
-		fmt.Fprintf(&b, "%s %s\n", status, result.Case.ID)
-		fmt.Fprintf(&b, "- command: %s\n", runner.CommandString(result.Case.Command))
-		fmt.Fprintf(&b, "- expected hits: %d/%d (min %d)\n", result.ExpectedHitCount, len(uniqueStrings(result.Case.ExpectedSources)), result.Case.MinExpectedHits)
-		fmt.Fprintf(&b, "- expected: %s\n", renderList(result.Case.ExpectedSources))
-		fmt.Fprintf(&b, "- cited: %s\n", renderList(result.CitedTitles))
-		fmt.Fprintf(&b, "- planner: %s\n", result.PlannerRetrieve)
-		fmt.Fprintf(&b, "- queries: %d\n", result.QueryCount)
-		if len(result.Case.ExpectedEvidenceTerms) > 0 {
-			fmt.Fprintf(&b, "- expected evidence terms: %s\n", strings.Join(result.Case.ExpectedEvidenceTerms, ", "))
-		}
-		if len(result.Failures) > 0 {
-			fmt.Fprintf(&b, "- failures: %s\n", strings.Join(result.Failures, "; "))
-		}
-		if summary.Verbose {
-			if output := excerpt(result.SetupOutput, 600); output != "" {
-				fmt.Fprintf(&b, "- setup output: %s\n", output)
-			}
-			if output := excerpt(result.CommandOutput, 1200); output != "" {
-				fmt.Fprintf(&b, "- command output: %s\n", output)
-			}
-			if output := excerpt(result.TeardownOutput, 600); output != "" {
-				fmt.Fprintf(&b, "- teardown output: %s\n", output)
-			}
-		}
+		b.WriteString(renderPlainCase(result, summary.Verbose))
 	}
 	return b.String()
 }
@@ -370,43 +342,60 @@ func RenderSummaryStyled(summary Summary, width int) string {
 	if width <= 0 {
 		width = 88
 	}
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Render("lark-cue benchmark report")
+	cardWidth := clamp(width-4, 72, 118)
+	contentWidth := cardWidth - 6
+	accent := lipgloss.Color("10")
+	status := "PASS"
+	if !summary.AllPassed() {
+		accent = lipgloss.Color("9")
+		status = "CHECK"
+	}
+	box := lipgloss.NewStyle().
+		Width(cardWidth).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(accent).
+		Padding(1, 2)
+	title := lipgloss.NewStyle().Bold(true).Foreground(accent)
+	badge := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(accent).Padding(0, 1)
+	label := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("8"))
 	passStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10"))
 	failStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9"))
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	var b strings.Builder
-	b.WriteString(title)
-	b.WriteString("\n\n")
-	fmt.Fprintf(&b, "%s %d/%d passed  %s %d/%d  %s %d/%d  %s %d/%d  %s %.0fms\n\n",
-		muted.Render("cases"), summary.PassedCases, summary.TotalCases,
-		muted.Render("hits"), summary.ExpectedSourceHitCases, summary.TotalCases,
-		muted.Render("coverage"), summary.DistinctMatchedSources, summary.DistinctExpectedSources,
-		muted.Render("precision"), summary.ExpectedCitationHits, summary.TotalCitations,
-		muted.Render("avg latency"), summary.AverageLatencyMS)
+
+	var caseLines []string
 	for _, result := range summary.Results {
-		status := failStyle.Render("FAIL")
+		caseStatus := failStyle.Render("FAIL")
 		if result.Passed {
-			status = passStyle.Render("PASS")
+			caseStatus = passStyle.Render("PASS")
 		}
-		fmt.Fprintf(&b, "%s %s\n", status, result.Case.ID)
-		fmt.Fprintf(&b, "  command: %s\n", runner.CommandString(result.Case.Command))
-		fmt.Fprintf(&b, "  expected hits: %d/%d (min %d)\n", result.ExpectedHitCount, len(uniqueStrings(result.Case.ExpectedSources)), result.Case.MinExpectedHits)
-		fmt.Fprintf(&b, "  expected: %s\n", renderList(result.Case.ExpectedSources))
-		fmt.Fprintf(&b, "  cited: %s\n", renderList(result.CitedTitles))
-		fmt.Fprintf(&b, "  planner: %s, queries: %d\n", result.PlannerRetrieve, result.QueryCount)
-		if len(result.Case.ExpectedEvidenceTerms) > 0 {
-			fmt.Fprintf(&b, "  expected evidence terms: %s\n", strings.Join(result.Case.ExpectedEvidenceTerms, ", "))
+		primary := fmt.Sprintf("%s %-45s %s %d/%d  %s %d  %s %s",
+			caseStatus,
+			clipRunes(result.Case.ID, 45),
+			muted.Render("hits"), result.ExpectedHitCount, len(uniqueStrings(result.Case.ExpectedSources)),
+			muted.Render("q"), result.QueryCount,
+			muted.Render("lat"), formatMillis(result.LatencyMS),
+		)
+		caseLines = append(caseLines, primary)
+		if !result.Passed {
+			caseLines = append(caseLines, "     "+failStyle.Render(clipRunes(strings.Join(result.Failures, "; "), contentWidth-5)))
+		} else if summary.Verbose {
+			caseLines = append(caseLines, "     "+muted.Render(clipRunes("cited: "+compactList(result.CitedTitles, 3), contentWidth-5)))
 		}
-		if len(result.Failures) > 0 {
-			fmt.Fprintf(&b, "  failures: %s\n", strings.Join(result.Failures, "; "))
-		}
-		if summary.Verbose {
-			if output := excerpt(result.CommandOutput, 1200); output != "" {
-				fmt.Fprintf(&b, "  output: %s\n", output)
+		if summary.Verbose && !result.Passed {
+			if output := firstNonEmpty(excerpt(result.CommandOutput, 220), excerpt(result.SetupOutput, 220), excerpt(result.TeardownOutput, 220)); output != "" {
+				caseLines = append(caseLines, "     "+muted.Render(clipRunes("output: "+output, contentWidth-5)))
 			}
 		}
 	}
-	return lipgloss.NewStyle().Width(width).Render(b.String())
+
+	overview := strings.Join(summaryMetricLines(summary), "\n")
+	header := title.Render("lark-cue benchmark") + "  " + badge.Render(status)
+	sections := []string{
+		header,
+		renderKV(label, overview, "Summary"),
+		renderKV(label, strings.Join(caseLines, "\n"), "Cases"),
+	}
+	return box.Render(strings.Join(sections, "\n\n")) + "\n"
 }
 
 func makeSet(values []string) map[string]bool {
@@ -435,6 +424,112 @@ func renderList(values []string) string {
 		return "(none)"
 	}
 	return strings.Join(values, ", ")
+}
+
+func renderPlainCase(result CaseResult, verbose bool) string {
+	status := "FAIL"
+	if result.Passed {
+		status = "PASS"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s %s  hits %d/%d  citations %d  queries %d  latency %s\n",
+		status,
+		result.Case.ID,
+		result.ExpectedHitCount,
+		len(uniqueStrings(result.Case.ExpectedSources)),
+		result.TotalCitations,
+		result.QueryCount,
+		formatMillis(result.LatencyMS),
+	)
+	fmt.Fprintf(&b, "  command: %s\n", runner.CommandString(result.Case.Command))
+	fmt.Fprintf(&b, "  planner: %s, queries: %d\n", result.PlannerRetrieve, result.QueryCount)
+	if result.Passed {
+		fmt.Fprintf(&b, "  cited: %s\n", compactList(result.CitedTitles, 5))
+		return b.String()
+	}
+	fmt.Fprintf(&b, "  expected: %s\n", compactList(result.Case.ExpectedSources, 5))
+	fmt.Fprintf(&b, "  cited: %s\n", compactList(result.CitedTitles, 5))
+	if len(result.Failures) > 0 {
+		fmt.Fprintf(&b, "  failures: %s\n", strings.Join(result.Failures, "; "))
+	}
+	if verbose {
+		if output := firstNonEmpty(excerpt(result.CommandOutput, 500), excerpt(result.SetupOutput, 300), excerpt(result.TeardownOutput, 300)); output != "" {
+			fmt.Fprintf(&b, "  output: %s\n", output)
+		}
+	}
+	return b.String()
+}
+
+func summaryMetricLines(summary Summary) []string {
+	lines := []string{
+		fmt.Sprintf("cases: %d/%d passed", summary.PassedCases, summary.TotalCases),
+		fmt.Sprintf("expected-source hit rate: %d/%d", summary.ExpectedSourceHitCases, summary.TotalCases),
+		fmt.Sprintf("source coverage: %d/%d", summary.DistinctMatchedSources, summary.DistinctExpectedSources),
+		fmt.Sprintf("citation precision: %d/%d", summary.ExpectedCitationHits, summary.TotalCitations),
+		fmt.Sprintf("avg latency: %s", formatMillis(int64(summary.AverageLatencyMS))),
+	}
+	if summary.Jobs > 0 {
+		lines = append(lines, fmt.Sprintf("parallel jobs: %d", summary.Jobs))
+	}
+	return lines
+}
+
+func compactList(values []string, maxItems int) string {
+	values = uniqueStrings(values)
+	if len(values) == 0 {
+		return "(none)"
+	}
+	if maxItems < 1 || len(values) <= maxItems {
+		return strings.Join(values, ", ")
+	}
+	return strings.Join(values[:maxItems], ", ") + fmt.Sprintf(", +%d more", len(values)-maxItems)
+}
+
+func formatMillis(value int64) string {
+	if value <= 0 {
+		return "0ms"
+	}
+	if value >= 1000 {
+		return fmt.Sprintf("%.1fs", float64(value)/1000)
+	}
+	return fmt.Sprintf("%dms", value)
+}
+
+func renderKV(label lipgloss.Style, value, key string) string {
+	return label.Render(key) + "\n" + value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func clipRunes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-3]) + "..."
+}
+
+func clamp(value, minValue, maxValue int) int {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
 }
 
 func excerpt(value string, limit int) string {

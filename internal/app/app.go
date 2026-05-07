@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/term"
@@ -47,6 +48,7 @@ type benchmarkRunOptions struct {
 	casesPath  string
 	verbose    bool
 	noOpenClaw bool
+	jobs       int
 }
 
 type cueProvider interface {
@@ -197,6 +199,16 @@ func parseBenchmarkRunArgs(args []string) (benchmarkRunOptions, error) {
 			opts.verbose = true
 		case "--no-openclaw":
 			opts.noOpenClaw = true
+		case "--jobs":
+			if i+1 >= len(args) {
+				return opts, errors.New("--jobs requires a positive integer")
+			}
+			i++
+			jobs, err := strconv.Atoi(args[i])
+			if err != nil || jobs < 1 {
+				return opts, errors.New("--jobs requires a positive integer")
+			}
+			opts.jobs = jobs
 		case "-h", "--help":
 			return opts, errHelp
 		default:
@@ -458,16 +470,14 @@ func runBenchmark(ctx context.Context, cfg config.Config, opts benchmarkRunOptio
 	restoreEvalLogEnv := setBenchmarkEvalLogEnv(benchCfg.Evaluation.LogPath)
 	defer restoreEvalLogEnv()
 
-	results := make([]benchmark.CaseResult, 0, len(cases))
-	for _, c := range cases {
-		observation, err := runBenchmarkCase(ctx, benchCfg, c, opts)
-		if err != nil {
-			fmt.Fprintf(stderr, "lark-cue benchmark: %v\n", err)
-			return 2
-		}
-		results = append(results, benchmark.ScoreCase(c, observation))
+	jobs := normalizedBenchmarkJobs(opts.jobs, len(cases))
+	results, err := runBenchmarkCases(ctx, benchCfg, cases, opts, tempDir, jobs)
+	if err != nil {
+		fmt.Fprintf(stderr, "lark-cue benchmark: %v\n", err)
+		return 2
 	}
 	summary := benchmark.Summarize(results, opts.verbose)
+	summary.Jobs = jobs
 	if shouldStyleOutput(stdout) {
 		fmt.Fprint(stdout, benchmark.RenderSummaryStyled(summary, terminalWidth(stdout)))
 	} else {
@@ -477,6 +487,70 @@ func runBenchmark(ctx context.Context, cfg config.Config, opts benchmarkRunOptio
 		return 0
 	}
 	return 1
+}
+
+func normalizedBenchmarkJobs(requested int, caseCount int) int {
+	if caseCount < 1 {
+		return 1
+	}
+	if requested > 0 {
+		if requested > caseCount {
+			return caseCount
+		}
+		return requested
+	}
+	if caseCount < 4 {
+		return caseCount
+	}
+	return 4
+}
+
+type benchmarkCaseRun struct {
+	index  int
+	result benchmark.CaseResult
+	err    error
+}
+
+func runBenchmarkCases(ctx context.Context, cfg config.Config, cases []benchmark.Case, opts benchmarkRunOptions, tempDir string, jobs int) ([]benchmark.CaseResult, error) {
+	results := make([]benchmark.CaseResult, len(cases))
+	indexes := make(chan int)
+	out := make(chan benchmarkCaseRun, len(cases))
+	var wg sync.WaitGroup
+
+	for worker := 0; worker < jobs; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range indexes {
+				c := cases[index]
+				caseCfg := cfg
+				caseCfg.Evaluation.LogPath = filepath.Join(tempDir, fmt.Sprintf("%03d-%s.jsonl", index+1, sanitizeScenarioID(c.ID)))
+				observation, err := runBenchmarkCase(ctx, caseCfg, c, opts)
+				if err != nil {
+					out <- benchmarkCaseRun{index: index, err: err}
+					continue
+				}
+				out <- benchmarkCaseRun{index: index, result: benchmark.ScoreCase(c, observation)}
+			}
+		}()
+	}
+
+	go func() {
+		for index := range cases {
+			indexes <- index
+		}
+		close(indexes)
+		wg.Wait()
+		close(out)
+	}()
+
+	for item := range out {
+		if item.err != nil {
+			return nil, item.err
+		}
+		results[item.index] = item.result
+	}
+	return results, nil
 }
 
 func setBenchmarkEvalLogEnv(path string) func() {
@@ -738,8 +812,9 @@ func printBenchmarkRunHelp(w io.Writer) {
 
 Flags:
   --cases <path>  Benchmark case JSON file
+  --jobs <N>      Run up to N cases concurrently (default: 4)
   --no-openclaw   Skip OpenClaw preflight and post-card handoff for benchmark cases
-  --verbose       Include compact command diagnostics in the report`)
+  --verbose       Include compact failure diagnostics in the report`)
 }
 
 func printEvalReportHelp(w io.Writer) {
