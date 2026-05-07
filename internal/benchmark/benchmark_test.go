@@ -101,8 +101,8 @@ func TestFlowOpsEvalCasesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCases FlowOps eval cases error: %v", err)
 	}
-	if len(cases) != 3 {
-		t.Fatalf("FlowOps cases len = %d, want 3", len(cases))
+	if len(cases) != 4 {
+		t.Fatalf("FlowOps cases len = %d, want 4", len(cases))
 	}
 	got := cases[0]
 	if got.Command[0] != "flowctl" || !got.ExpectFailure || got.MinExpectedHits != 1 {
@@ -115,6 +115,10 @@ func TestFlowOpsEvalCasesLoad(t *testing.T) {
 	semanticCase := cases[2]
 	if semanticCase.ID != "flowops-orders-reconcile-watermark-lag" || semanticCase.Command[2] != "orders_reconcile_2026" {
 		t.Fatalf("unexpected FlowOps semantic case: %+v", semanticCase)
+	}
+	secretCase := cases[3]
+	if secretCase.ID != "flowops-ad-spend-secret-rotation" || secretCase.Command[2] != "ad_spend_daily" {
+		t.Fatalf("unexpected FlowOps secret case: %+v", secretCase)
 	}
 }
 

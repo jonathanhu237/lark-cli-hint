@@ -38,6 +38,18 @@
         "FlowOps Dataset Freshness 排障 FAQ"
       ],
       "min_expected_hits": 1
+    },
+    {
+      "id": "flowops-ad-spend-secret-rotation",
+      "setup": [
+        ["flowctl", "secrets", "reset", "ad_spend_daily"]
+      ],
+      "command": ["flowctl", "check", "ad_spend_daily"],
+      "expect_failure": true,
+      "expected_sources": [
+        "FlowOps Secret Rotation 排障 FAQ"
+      ],
+      "min_expected_hits": 1
     }
   ]
 }

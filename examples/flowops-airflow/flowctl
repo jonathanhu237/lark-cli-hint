@@ -24,6 +24,8 @@ Usage:
   flowctl check [dag_id]
   flowctl dataset backfill <dag_id> --date <yyyy-mm-dd>
   flowctl dataset reset [dag_id]
+  flowctl secrets renew <dag_id> --secret <name> --epoch <epoch>
+  flowctl secrets reset [dag_id]
   flowctl source refresh <dag_id> --alias <missing=actual>
   flowctl source reset [dag_id]
   flowctl airflow <args...>
@@ -35,6 +37,7 @@ Commands:
   init          Initialize the local Airflow metadata DB once.
   check         Run the real Airflow import-error check for a DAG.
   dataset       Manage local FlowOps dataset freshness state for the demo.
+  secrets       Manage local FlowOps secret state for the demo.
   source        Manage local FlowOps source bindings for the demo.
   airflow       Pass arguments to the real Airflow CLI in Docker Compose.
   up            Start local webserver and scheduler for inspection.
@@ -135,6 +138,24 @@ ERROR
   return 1
 }
 
+check_ad_spend_daily() {
+  if marker_present "ad_spend_daily_secret"; then
+    echo "FlowOps warehouse credential OK: ad_spend_daily warehouse_token epoch=2026w19"
+    echo "ad_spend_daily check passed"
+    return 0
+  fi
+
+  cat >&2 <<'ERROR'
+FlowOpsWarehouseAuthError: ad_spend_daily rejected by warehouse session broker
+credential lease: warehouse_token epoch=2026w18
+required epoch: 2026w19
+symptom: scheduled extract cannot open ads mart snapshot
+owner: ads-analytics
+hint: search internal FlowOps knowledge for stale warehouse credential or secret rotation
+ERROR
+  return 1
+}
+
 check_billing_export() {
   if source_alias_present "billing_export_2026" "customer_segment=segment"; then
     echo "FlowOps source binding OK: billing_export_2026 customer_segment -> segment"
@@ -150,6 +171,58 @@ owner: billing-platform
 hint: search internal FlowOps group for billing_export_2026 customer_segment source refresh
 ERROR
   return 1
+}
+
+renew_secret() {
+  local dag_id="${1:-}"
+  shift || true
+  local secret=""
+  local epoch=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --secret)
+        if [[ "$#" -lt 2 ]]; then
+          echo "flowctl secrets renew: --secret requires a name" >&2
+          exit 2
+        fi
+        secret="$2"
+        shift 2
+        ;;
+      --epoch)
+        if [[ "$#" -lt 2 ]]; then
+          echo "flowctl secrets renew: --epoch requires a value" >&2
+          exit 2
+        fi
+        epoch="$2"
+        shift 2
+        ;;
+      *)
+        echo "flowctl secrets renew: unknown argument: $1" >&2
+        exit 2
+        ;;
+    esac
+  done
+  if [[ "${dag_id}" != "ad_spend_daily" || "${secret}" != "warehouse_token" || "${epoch}" != "2026w19" ]]; then
+    echo "FlowOpsWarehouseAuthError: no test secret renewal matches ${dag_id} ${secret} ${epoch}" >&2
+    exit 1
+  fi
+  mark_scenario "ad_spend_daily_secret"
+  echo "FlowOps secret renewed: ${dag_id} ${secret} epoch=${epoch}"
+  echo "Next: flowctl check ${dag_id}"
+}
+
+reset_secret() {
+  local dag_id="${1:-}"
+  case "${dag_id}" in
+    ""|"ad_spend_daily")
+      reset_marker "ad_spend_daily_secret"
+      echo "FlowOps secret state reset: ${dag_id:-all}"
+      ;;
+    *)
+      echo "flowctl secrets reset: unknown demo dag ${dag_id}" >&2
+      exit 2
+      ;;
+  esac
 }
 
 backfill_dataset() {
@@ -264,6 +337,9 @@ case "${command}" in
       orders_reconcile_2026)
         check_orders_reconcile
         ;;
+      ad_spend_daily)
+        check_ad_spend_daily
+        ;;
       *)
         run_airflow "dags list-import-errors"
         run_airflow "dags show ${dag_id}"
@@ -284,6 +360,24 @@ case "${command}" in
       *)
         echo "Usage: flowctl dataset backfill <dag_id> --date <yyyy-mm-dd>" >&2
         echo "       flowctl dataset reset [dag_id]" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  secrets)
+    subcommand="${2:-}"
+    case "${subcommand}" in
+      renew)
+        shift 2
+        renew_secret "$@"
+        ;;
+      reset)
+        shift 2
+        reset_secret "$@"
+        ;;
+      *)
+        echo "Usage: flowctl secrets renew <dag_id> --secret <name> --epoch <epoch>" >&2
+        echo "       flowctl secrets reset [dag_id]" >&2
         exit 2
         ;;
     esac

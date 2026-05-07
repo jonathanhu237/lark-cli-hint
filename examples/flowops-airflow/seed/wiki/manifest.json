@@ -9,6 +9,8 @@
     "schema drift",
     "orders_reconcile_2026",
     "watermark lag",
+    "ad_spend_daily",
+    "warehouse_token",
     "FlowOps DAG",
     "FlowOps DAG 开发规范"
   ],
@@ -50,6 +52,10 @@
             {
               "title": "FlowOps Dataset Freshness 排障 FAQ",
               "file": "FlowOps Dataset Freshness 排障 FAQ.md"
+            },
+            {
+              "title": "FlowOps Secret Rotation 排障 FAQ",
+              "file": "FlowOps Secret Rotation 排障 FAQ.md"
             }
           ]
         },
