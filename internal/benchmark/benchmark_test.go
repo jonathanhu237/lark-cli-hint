@@ -106,8 +106,8 @@ func TestFlowOpsEvalCasesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCases FlowOps eval cases error: %v", err)
 	}
-	if len(cases) != 9 {
-		t.Fatalf("FlowOps cases len = %d, want 9", len(cases))
+	if len(cases) != 10 {
+		t.Fatalf("FlowOps cases len = %d, want 10", len(cases))
 	}
 	got := cases[0]
 	if got.Command[0] != "flowctl" || !got.ExpectFailure || got.MinExpectedHits != 1 {
@@ -144,6 +144,10 @@ func TestFlowOpsEvalCasesLoad(t *testing.T) {
 	governanceCase := cases[8]
 	if governanceCase.ID != "flowops-customer360-pii-governance" || governanceCase.Command[2] != "customer360_pii" {
 		t.Fatalf("unexpected FlowOps governance case: %+v", governanceCase)
+	}
+	releaseCase := cases[9]
+	if releaseCase.ID != "flowops-revenue-forecast-release-freeze" || releaseCase.Command[2] != "revenue_forecast" {
+		t.Fatalf("unexpected FlowOps release case: %+v", releaseCase)
 	}
 }
 

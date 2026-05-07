@@ -126,6 +126,22 @@
         "PRIV-2049"
       ],
       "min_expected_hits": 1
+    },
+    {
+      "id": "flowops-revenue-forecast-release-freeze",
+      "setup": [
+        ["flowctl", "release", "reset", "revenue_forecast"]
+      ],
+      "command": ["flowctl", "check", "revenue_forecast"],
+      "expect_failure": true,
+      "expected_sources": [
+        "星桥科技 FlowOps 排障演示群"
+      ],
+      "expected_evidence_terms": [
+        "finclose-2026-05",
+        "RFC-7781"
+      ],
+      "min_expected_hits": 1
     }
   ]
 }

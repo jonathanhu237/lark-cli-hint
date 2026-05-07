@@ -4,7 +4,7 @@
 
 ## 现象
 
-`flowctl check crm_sync` 报 `FlowOpsEgressDenied`、TLS handshake timeout、`crm.internal.svc:443` 无法访问，或者 customer delta pull 在默认出口 profile 下超时。
+`flowctl check crm_sync` 报 `FlowOpsEgressDenied`、TLS handshake timeout、`crm.internal.svc:443` 无法访问，或者 customer delta pull 在默认出口 profile 下超时；演示环境需要绑定 `revenue-egress`。
 
 ## 可能原因
 

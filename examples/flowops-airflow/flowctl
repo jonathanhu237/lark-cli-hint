@@ -34,6 +34,8 @@ Usage:
   flowctl network reset [dag_id]
   flowctl quota claim <dag_id> --bucket <name> --mode <mode>
   flowctl quota reset [dag_id]
+  flowctl release waive <dag_id> --window <id> --ticket <id>
+  flowctl release reset [dag_id]
   flowctl secrets renew <dag_id> --secret <name> --epoch <epoch>
   flowctl secrets reset [dag_id]
   flowctl source refresh <dag_id> --alias <missing=actual>
@@ -52,6 +54,7 @@ Commands:
   governance    Manage local FlowOps data governance state for the demo.
   network       Manage local FlowOps egress state for the demo.
   quota         Manage local FlowOps quota state for the demo.
+  release       Manage local FlowOps release window state for the demo.
   secrets       Manage local FlowOps secret state for the demo.
   source        Manage local FlowOps source bindings for the demo.
   airflow       Pass arguments to the real Airflow CLI in Docker Compose.
@@ -255,6 +258,23 @@ field: ssn_hash
 approval state: missing privacy review
 owner: data-governance
 hint: search internal FlowOps knowledge for PII approval or privacy review ticket
+ERROR
+  return 1
+}
+
+check_revenue_forecast() {
+  if marker_present "revenue_forecast_release"; then
+    echo "FlowOps release waiver OK: revenue_forecast finclose-2026-05 ticket=RFC-7781"
+    echo "revenue_forecast check passed"
+    return 0
+  fi
+
+  cat >&2 <<'ERROR'
+FlowOpsChangeFreeze: revenue_forecast publish blocked by calendar window
+change window: finclose-2026-05
+state: frozen until CFO signoff
+owner: finance-analytics
+hint: search internal FlowOps group for freeze waiver or release window exception
 ERROR
   return 1
 }
@@ -479,6 +499,58 @@ reset_governance() {
       ;;
     *)
       echo "flowctl governance reset: unknown demo dag ${dag_id}" >&2
+      exit 2
+      ;;
+  esac
+}
+
+waive_release() {
+  local dag_id="${1:-}"
+  shift || true
+  local window=""
+  local ticket=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --window)
+        if [[ "$#" -lt 2 ]]; then
+          echo "flowctl release waive: --window requires an id" >&2
+          exit 2
+        fi
+        window="$2"
+        shift 2
+        ;;
+      --ticket)
+        if [[ "$#" -lt 2 ]]; then
+          echo "flowctl release waive: --ticket requires an id" >&2
+          exit 2
+        fi
+        ticket="$2"
+        shift 2
+        ;;
+      *)
+        echo "flowctl release waive: unknown argument: $1" >&2
+        exit 2
+        ;;
+    esac
+  done
+  if [[ "${dag_id}" != "revenue_forecast" || "${window}" != "finclose-2026-05" || "${ticket}" != "RFC-7781" ]]; then
+    echo "FlowOpsChangeFreeze: no test release waiver matches ${dag_id} ${window} ${ticket}" >&2
+    exit 1
+  fi
+  mark_scenario "revenue_forecast_release"
+  echo "FlowOps release waiver recorded: ${dag_id} window=${window} ticket=${ticket}"
+  echo "Next: flowctl check ${dag_id}"
+}
+
+reset_release() {
+  local dag_id="${1:-}"
+  case "${dag_id}" in
+    ""|"revenue_forecast")
+      reset_marker "revenue_forecast_release"
+      echo "FlowOps release state reset: ${dag_id:-all}"
+      ;;
+    *)
+      echo "flowctl release reset: unknown demo dag ${dag_id}" >&2
       exit 2
       ;;
   esac
@@ -718,6 +790,9 @@ case "${command}" in
       customer360_pii)
         check_customer360_pii
         ;;
+      revenue_forecast)
+        check_revenue_forecast
+        ;;
       *)
         run_airflow "dags list-import-errors"
         run_airflow "dags show ${dag_id}"
@@ -828,6 +903,24 @@ case "${command}" in
       *)
         echo "Usage: flowctl quota claim <dag_id> --bucket <name> --mode <mode>" >&2
         echo "       flowctl quota reset [dag_id]" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  release)
+    subcommand="${2:-}"
+    case "${subcommand}" in
+      waive)
+        shift 2
+        waive_release "$@"
+        ;;
+      reset)
+        shift 2
+        reset_release "$@"
+        ;;
+      *)
+        echo "Usage: flowctl release waive <dag_id> --window <id> --ticket <id>" >&2
+        echo "       flowctl release reset [dag_id]" >&2
         exit 2
         ;;
     esac
