@@ -22,6 +22,8 @@ usage() {
 Usage:
   flowctl init
   flowctl check [dag_id]
+  flowctl capacity bump <dag_id> --pool <name> --slots <n>
+  flowctl capacity reset [dag_id]
   flowctl dataset backfill <dag_id> --date <yyyy-mm-dd>
   flowctl dataset reset [dag_id]
   flowctl secrets renew <dag_id> --secret <name> --epoch <epoch>
@@ -36,6 +38,7 @@ Usage:
 Commands:
   init          Initialize the local Airflow metadata DB once.
   check         Run the real Airflow import-error check for a DAG.
+  capacity      Manage local FlowOps capacity state for the demo.
   dataset       Manage local FlowOps dataset freshness state for the demo.
   secrets       Manage local FlowOps secret state for the demo.
   source        Manage local FlowOps source bindings for the demo.
@@ -156,6 +159,23 @@ ERROR
   return 1
 }
 
+check_inventory_snapshot() {
+  if marker_present "inventory_snapshot_capacity"; then
+    echo "FlowOps capacity OK: inventory_snapshot bulk_export_pool slots=4"
+    echo "inventory_snapshot check passed"
+    return 0
+  fi
+
+  cat >&2 <<'ERROR'
+FlowOpsCapacityError: inventory_snapshot stuck in queued state for 42m
+dagrun queue: bulk_export_pool occupied by nightly fanout exports
+worker hint: no runnable slot for high fanout extract
+owner: supply-chain
+hint: search internal FlowOps knowledge for queued task or pool congestion
+ERROR
+  return 1
+}
+
 check_billing_export() {
   if source_alias_present "billing_export_2026" "customer_segment=segment"; then
     echo "FlowOps source binding OK: billing_export_2026 customer_segment -> segment"
@@ -171,6 +191,58 @@ owner: billing-platform
 hint: search internal FlowOps group for billing_export_2026 customer_segment source refresh
 ERROR
   return 1
+}
+
+bump_capacity() {
+  local dag_id="${1:-}"
+  shift || true
+  local pool=""
+  local slots=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --pool)
+        if [[ "$#" -lt 2 ]]; then
+          echo "flowctl capacity bump: --pool requires a name" >&2
+          exit 2
+        fi
+        pool="$2"
+        shift 2
+        ;;
+      --slots)
+        if [[ "$#" -lt 2 ]]; then
+          echo "flowctl capacity bump: --slots requires a number" >&2
+          exit 2
+        fi
+        slots="$2"
+        shift 2
+        ;;
+      *)
+        echo "flowctl capacity bump: unknown argument: $1" >&2
+        exit 2
+        ;;
+    esac
+  done
+  if [[ "${dag_id}" != "inventory_snapshot" || "${pool}" != "bulk_export_pool" || "${slots}" != "4" ]]; then
+    echo "FlowOpsCapacityError: no test capacity change matches ${dag_id} ${pool} ${slots}" >&2
+    exit 1
+  fi
+  mark_scenario "inventory_snapshot_capacity"
+  echo "FlowOps capacity bumped: ${dag_id} pool=${pool} slots=${slots}"
+  echo "Next: flowctl check ${dag_id}"
+}
+
+reset_capacity() {
+  local dag_id="${1:-}"
+  case "${dag_id}" in
+    ""|"inventory_snapshot")
+      reset_marker "inventory_snapshot_capacity"
+      echo "FlowOps capacity state reset: ${dag_id:-all}"
+      ;;
+    *)
+      echo "flowctl capacity reset: unknown demo dag ${dag_id}" >&2
+      exit 2
+      ;;
+  esac
 }
 
 renew_secret() {
@@ -340,9 +412,30 @@ case "${command}" in
       ad_spend_daily)
         check_ad_spend_daily
         ;;
+      inventory_snapshot)
+        check_inventory_snapshot
+        ;;
       *)
         run_airflow "dags list-import-errors"
         run_airflow "dags show ${dag_id}"
+        ;;
+    esac
+    ;;
+  capacity)
+    subcommand="${2:-}"
+    case "${subcommand}" in
+      bump)
+        shift 2
+        bump_capacity "$@"
+        ;;
+      reset)
+        shift 2
+        reset_capacity "$@"
+        ;;
+      *)
+        echo "Usage: flowctl capacity bump <dag_id> --pool <name> --slots <n>" >&2
+        echo "       flowctl capacity reset [dag_id]" >&2
+        exit 2
         ;;
     esac
     ;;

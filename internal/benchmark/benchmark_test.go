@@ -101,8 +101,8 @@ func TestFlowOpsEvalCasesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCases FlowOps eval cases error: %v", err)
 	}
-	if len(cases) != 4 {
-		t.Fatalf("FlowOps cases len = %d, want 4", len(cases))
+	if len(cases) != 5 {
+		t.Fatalf("FlowOps cases len = %d, want 5", len(cases))
 	}
 	got := cases[0]
 	if got.Command[0] != "flowctl" || !got.ExpectFailure || got.MinExpectedHits != 1 {
@@ -119,6 +119,10 @@ func TestFlowOpsEvalCasesLoad(t *testing.T) {
 	secretCase := cases[3]
 	if secretCase.ID != "flowops-ad-spend-secret-rotation" || secretCase.Command[2] != "ad_spend_daily" {
 		t.Fatalf("unexpected FlowOps secret case: %+v", secretCase)
+	}
+	capacityCase := cases[4]
+	if capacityCase.ID != "flowops-inventory-snapshot-capacity" || capacityCase.Command[2] != "inventory_snapshot" {
+		t.Fatalf("unexpected FlowOps capacity case: %+v", capacityCase)
 	}
 }
 

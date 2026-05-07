@@ -50,6 +50,18 @@
         "FlowOps Secret Rotation 排障 FAQ"
       ],
       "min_expected_hits": 1
+    },
+    {
+      "id": "flowops-inventory-snapshot-capacity",
+      "setup": [
+        ["flowctl", "capacity", "reset", "inventory_snapshot"]
+      ],
+      "command": ["flowctl", "check", "inventory_snapshot"],
+      "expect_failure": true,
+      "expected_sources": [
+        "FlowOps Executor Capacity 排障 FAQ"
+      ],
+      "min_expected_hits": 1
     }
   ]
 }

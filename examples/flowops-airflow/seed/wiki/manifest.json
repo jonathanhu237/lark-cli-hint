@@ -11,6 +11,9 @@
     "watermark lag",
     "ad_spend_daily",
     "warehouse_token",
+    "inventory_snapshot",
+    "bulk_export_pool",
+    "queued state",
     "FlowOps DAG",
     "FlowOps DAG 开发规范"
   ],
@@ -56,6 +59,10 @@
             {
               "title": "FlowOps Secret Rotation 排障 FAQ",
               "file": "FlowOps Secret Rotation 排障 FAQ.md"
+            },
+            {
+              "title": "FlowOps Executor Capacity 排障 FAQ",
+              "file": "FlowOps Executor Capacity 排障 FAQ.md"
             }
           ]
         },
