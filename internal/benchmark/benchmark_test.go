@@ -106,8 +106,8 @@ func TestFlowOpsEvalCasesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCases FlowOps eval cases error: %v", err)
 	}
-	if len(cases) != 6 {
-		t.Fatalf("FlowOps cases len = %d, want 6", len(cases))
+	if len(cases) != 7 {
+		t.Fatalf("FlowOps cases len = %d, want 7", len(cases))
 	}
 	got := cases[0]
 	if got.Command[0] != "flowctl" || !got.ExpectFailure || got.MinExpectedHits != 1 {
@@ -132,6 +132,10 @@ func TestFlowOpsEvalCasesLoad(t *testing.T) {
 	featureCase := cases[5]
 	if featureCase.ID != "flowops-churn-features-experiment-gate" || featureCase.Command[2] != "churn_features" {
 		t.Fatalf("unexpected FlowOps feature case: %+v", featureCase)
+	}
+	quotaCase := cases[6]
+	if quotaCase.ID != "flowops-payment-settlement-quota" || quotaCase.Command[2] != "payment_settlement" {
+		t.Fatalf("unexpected FlowOps quota case: %+v", quotaCase)
 	}
 }
 

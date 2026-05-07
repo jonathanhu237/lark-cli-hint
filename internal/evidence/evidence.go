@@ -133,6 +133,10 @@ var genericActionKeywords = []string{
 	"排查",
 	"验证",
 	"检查",
+	"执行",
+	"命令",
+	"申领",
+	"补跑",
 	"改用",
 	"移到",
 	"运行阶段",
@@ -147,6 +151,7 @@ var genericActionKeywords = []string{
 	"fix",
 	"move",
 	"use",
+	"claim",
 }
 
 var contextTokenRE = regexp.MustCompile(`[\p{L}\p{N}_:./-]+`)
@@ -220,20 +225,24 @@ func snippetForContext(content string, ctx Context, actionKeywords []string) str
 	lines := strings.Split(content, "\n")
 	var contextLine string
 	var actionLine string
+	contextLineScore := 0
+	actionLineScore := 0
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if line == "" || isMarkdownHeading(line) {
 			continue
 		}
 		lower := strings.ToLower(line)
-		if contextLine == "" && containsAnyKeyword(lower, keywords) {
+		if score := keywordScore(lower, 1, keywords); score > contextLineScore {
 			contextLine = line
+			contextLineScore = score
 		}
-		if actionLine == "" && containsAnyPositiveKeyword(lower, actionKeywords) {
-			actionLine = line
-		}
-		if contextLine != "" && actionLine != "" {
-			break
+		if containsAnyPositiveKeyword(lower, actionKeywords) {
+			score := positiveKeywordScore(lower, 2, actionKeywords) + keywordScore(lower, 1, keywords)
+			if score > actionLineScore {
+				actionLineScore = score
+				actionLine = line
+			}
 		}
 	}
 	switch {
@@ -386,7 +395,7 @@ func snippet(content string) string {
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		lower := strings.ToLower(line)
-		if line == "" {
+		if line == "" || isMarkdownHeading(line) {
 			continue
 		}
 		if strongLine == "" && (containsAnyKeyword(lower, strongScopeKeywords) || containsAnyKeyword(lower, strongErrorKeywords)) {
@@ -410,6 +419,10 @@ func snippet(content string) string {
 		return truncate(causeLine, 220)
 	}
 	return truncate(strings.TrimSpace(content), 220)
+}
+
+func isMarkdownHeading(line string) bool {
+	return strings.HasPrefix(strings.TrimSpace(line), "#")
 }
 
 func containsAnyKeyword(text string, keywords []string) bool {

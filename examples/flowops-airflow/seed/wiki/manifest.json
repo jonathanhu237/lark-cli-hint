@@ -17,6 +17,9 @@
     "churn_features",
     "EXP-883",
     "cohort resolver",
+    "payment_settlement",
+    "partner_api_v2",
+    "HTTP 429",
     "FlowOps DAG",
     "FlowOps DAG 开发规范"
   ],
@@ -74,6 +77,10 @@
             {
               "title": "FlowOps Executor Capacity 排障 FAQ",
               "file": "FlowOps Executor Capacity 排障 FAQ.md"
+            },
+            {
+              "title": "FlowOps Partner Quota 排障 FAQ",
+              "file": "FlowOps Partner Quota 排障 FAQ.md"
             }
           ]
         },

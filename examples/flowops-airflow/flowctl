@@ -28,6 +28,8 @@ Usage:
   flowctl dataset reset [dag_id]
   flowctl feature override <dag_id> --flag <id> --cohort <name>
   flowctl feature reset [dag_id]
+  flowctl quota claim <dag_id> --bucket <name> --mode <mode>
+  flowctl quota reset [dag_id]
   flowctl secrets renew <dag_id> --secret <name> --epoch <epoch>
   flowctl secrets reset [dag_id]
   flowctl source refresh <dag_id> --alias <missing=actual>
@@ -43,6 +45,7 @@ Commands:
   capacity      Manage local FlowOps capacity state for the demo.
   dataset       Manage local FlowOps dataset freshness state for the demo.
   feature       Manage local FlowOps feature gate state for the demo.
+  quota         Manage local FlowOps quota state for the demo.
   secrets       Manage local FlowOps secret state for the demo.
   source        Manage local FlowOps source bindings for the demo.
   airflow       Pass arguments to the real Airflow CLI in Docker Compose.
@@ -197,6 +200,24 @@ ERROR
   return 1
 }
 
+check_payment_settlement() {
+  if marker_present "payment_settlement_quota"; then
+    echo "FlowOps quota OK: payment_settlement partner_api_v2 mode=replay-window"
+    echo "payment_settlement check passed"
+    return 0
+  fi
+
+  cat >&2 <<'ERROR'
+FlowOpsRateLimitError: payment_settlement received HTTP 429 from partner_api_v2
+window: 2026-05-07T00:00+08:00
+vendor throttle: batch settlement quota exhausted
+retry_after: 900s
+owner: payments-core
+hint: search internal FlowOps knowledge for partner throttle or quota bucket handling
+ERROR
+  return 1
+}
+
 check_billing_export() {
   if source_alias_present "billing_export_2026" "customer_segment=segment"; then
     echo "FlowOps source binding OK: billing_export_2026 customer_segment -> segment"
@@ -261,6 +282,58 @@ reset_feature() {
       ;;
     *)
       echo "flowctl feature reset: unknown demo dag ${dag_id}" >&2
+      exit 2
+      ;;
+  esac
+}
+
+claim_quota() {
+  local dag_id="${1:-}"
+  shift || true
+  local bucket=""
+  local mode=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --bucket)
+        if [[ "$#" -lt 2 ]]; then
+          echo "flowctl quota claim: --bucket requires a name" >&2
+          exit 2
+        fi
+        bucket="$2"
+        shift 2
+        ;;
+      --mode)
+        if [[ "$#" -lt 2 ]]; then
+          echo "flowctl quota claim: --mode requires a value" >&2
+          exit 2
+        fi
+        mode="$2"
+        shift 2
+        ;;
+      *)
+        echo "flowctl quota claim: unknown argument: $1" >&2
+        exit 2
+        ;;
+    esac
+  done
+  if [[ "${dag_id}" != "payment_settlement" || "${bucket}" != "partner_api_v2" || "${mode}" != "replay-window" ]]; then
+    echo "FlowOpsRateLimitError: no test quota claim matches ${dag_id} ${bucket} ${mode}" >&2
+    exit 1
+  fi
+  mark_scenario "payment_settlement_quota"
+  echo "FlowOps quota claimed: ${dag_id} bucket=${bucket} mode=${mode}"
+  echo "Next: flowctl check ${dag_id}"
+}
+
+reset_quota() {
+  local dag_id="${1:-}"
+  case "${dag_id}" in
+    ""|"payment_settlement")
+      reset_marker "payment_settlement_quota"
+      echo "FlowOps quota state reset: ${dag_id:-all}"
+      ;;
+    *)
+      echo "flowctl quota reset: unknown demo dag ${dag_id}" >&2
       exit 2
       ;;
   esac
@@ -491,6 +564,9 @@ case "${command}" in
       churn_features)
         check_churn_features
         ;;
+      payment_settlement)
+        check_payment_settlement
+        ;;
       *)
         run_airflow "dags list-import-errors"
         run_airflow "dags show ${dag_id}"
@@ -547,6 +623,24 @@ case "${command}" in
       *)
         echo "Usage: flowctl feature override <dag_id> --flag <id> --cohort <name>" >&2
         echo "       flowctl feature reset [dag_id]" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  quota)
+    subcommand="${2:-}"
+    case "${subcommand}" in
+      claim)
+        shift 2
+        claim_quota "$@"
+        ;;
+      reset)
+        shift 2
+        reset_quota "$@"
+        ;;
+      *)
+        echo "Usage: flowctl quota claim <dag_id> --bucket <name> --mode <mode>" >&2
+        echo "       flowctl quota reset [dag_id]" >&2
         exit 2
         ;;
     esac

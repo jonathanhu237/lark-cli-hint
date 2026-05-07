@@ -238,6 +238,38 @@ func TestScoreWithContextSelectsFlowOpsEvidence(t *testing.T) {
 	}
 }
 
+func TestScoreWithContextSkipsMarkdownHeadingsForSnippet(t *testing.T) {
+	sources := []retrieval.Source{
+		{
+			Type:  "doc",
+			Title: "FlowOps Partner Quota 排障 FAQ",
+			Content: strings.Join([]string{
+				"# FlowOps Partner Quota 排障 FAQ",
+				"## 推荐处理",
+				"`flowctl check payment_settlement` 报 HTTP 429，合作方接口 partner_api_v2 命中 quota bucket。",
+				"先申领补跑配额：flowctl quota claim payment_settlement --bucket partner_api_v2 --mode replay-window。",
+			}, "\n"),
+			Fetched: true,
+		},
+	}
+	selected, confidence := Select(ScoreWithContext(sources, Context{
+		Scenario: "internal_flowops_rate_limit_quota",
+		Queries:  []string{"payment_settlement 429", "partner_api_v2 429", "quota bucket handling"},
+		Output:   "FlowOpsRateLimitError payment_settlement HTTP 429 partner_api_v2",
+	}))
+	if confidence == ConfidenceNone || len(selected) != 1 {
+		t.Fatalf("selected/confidence = %+v/%s", selected, confidence)
+	}
+	if strings.Contains(selected[0].Snippet, "#") {
+		t.Fatalf("snippet should skip markdown headings: %q", selected[0].Snippet)
+	}
+	for _, want := range []string{"partner_api_v2", "replay-window"} {
+		if !strings.Contains(selected[0].Snippet, want) {
+			t.Fatalf("snippet missing %q: %q", want, selected[0].Snippet)
+		}
+	}
+}
+
 func TestScoreWithContextFiltersUnrelatedEvidence(t *testing.T) {
 	sources := []retrieval.Source{
 		{

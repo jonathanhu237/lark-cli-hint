@@ -78,6 +78,22 @@
         "cohort_v3"
       ],
       "min_expected_hits": 1
+    },
+    {
+      "id": "flowops-payment-settlement-quota",
+      "setup": [
+        ["flowctl", "quota", "reset", "payment_settlement"]
+      ],
+      "command": ["flowctl", "check", "payment_settlement"],
+      "expect_failure": true,
+      "expected_sources": [
+        "FlowOps Partner Quota 排障 FAQ"
+      ],
+      "expected_evidence_terms": [
+        "partner_api_v2",
+        "replay-window"
+      ],
+      "min_expected_hits": 1
     }
   ]
 }
