@@ -2,12 +2,13 @@
 
 `lark-cue` is an LLM-planned internal knowledge cue assistant for terminal-heavy enterprise workflows.
 
-It wraps a command, preserves the command's stdout/stderr and exit code, and when the command fails it asks the configured LLM whether the failure should retrieve enterprise knowledge from Feishu. If retrieval is recommended, the LLM emits short keyword-style queries, `lark-cue` searches Feishu Docs/Wiki/Sheets and IM through `lark-cli`, then renders a compact cited knowledge card.
+It wraps a command, preserves the command's stdout/stderr and exit code, and when the command fails it asks the configured LLM whether the failure should retrieve enterprise knowledge from Feishu. If retrieval is recommended, the LLM emits short keyword-style queries, `lark-cue` searches Feishu Docs/Wiki and IM through `lark-cli`, then renders a compact cited knowledge card. By default, the final card is handed to OpenClaw so a local agent can continue from the cited evidence.
 
 ## Requirements
 
 - Go 1.24+
 - `lark-cli` authenticated against a Feishu tenant
+- Docker Desktop or Docker Compose for the FlowOps Airflow demo and benchmark
 - LLM config is required before `lark-cue run` will execute wrapped commands:
 
 ```sh
@@ -73,6 +74,7 @@ For local development builds that should not touch `PATH`, use `go build -o ./bi
 The main demo uses a real local Airflow environment wrapped as 星桥科技's internal FlowOps platform.
 
 ```sh
+# Dry-run first, then apply to the configured test Wiki/chat.
 examples/flowops-airflow/scripts/seed-feishu
 examples/flowops-airflow/scripts/seed-feishu --apply
 
@@ -98,16 +100,45 @@ flowctl check billing_export_2026
 
 See `docs/demo.md` and `examples/flowops-airflow/README.md` for the full recorded-demo flow.
 
-To benchmark whether the seeded Wiki and IM sources are actually cited for the real FlowOps failures:
+## FlowOps Benchmark
+
+The benchmark is the current effect-validation path. It runs real `flowctl` commands, lets `lark-cue` call the configured LLM to decide retrieval and generate Feishu keyword queries, searches the seeded Wiki/IM data, and then scores whether the final card cited the expected source.
+
+The current benchmark has 10 scenarios:
+
+| Case | Command | Expected source |
+| --- | --- | --- |
+| DAG import config | `flowctl check billing_daily` | Wiki FAQ + dev guide + postmortem |
+| Source schema drift | `flowctl check billing_export_2026` | Wiki FAQ + IM group |
+| Dataset freshness | `flowctl check orders_reconcile_2026` | Wiki FAQ |
+| Secret rotation | `flowctl check ad_spend_daily` | Wiki FAQ |
+| Executor capacity | `flowctl check inventory_snapshot` | Wiki FAQ |
+| Feature gate rollout | `flowctl check churn_features` | IM group, with `EXP-883` and `cohort_v3` |
+| Partner quota | `flowctl check payment_settlement` | Wiki FAQ, with `partner_api_v2` and `replay-window` |
+| Egress allowlist | `flowctl check crm_sync` | Wiki FAQ, with `crm.internal.svc` and `revenue-egress` |
+| Data governance | `flowctl check customer360_pii` | Wiki FAQ, with `PII-DLP-17` and `PRIV-2049` |
+| Release freeze | `flowctl check revenue_forecast` | IM group, with `finclose-2026-05` and `RFC-7781` |
+
+Run it locally:
 
 ```sh
-examples/flowops-airflow/scripts/reset-demo
+REPO_ROOT="$(pwd)"
+go build -o "$REPO_ROOT/bin/lark-cue" ./cmd/lark-cue
+examples/flowops-airflow/scripts/seed-feishu --apply
+examples/flowops-airflow/scripts/reset-demo --quiet
 cd examples/flowops-airflow/.demo-workspace
-export PATH="$PWD:$PATH"
-lark-cue benchmark run --cases ../seed/eval-cases.json
+export PATH="$PWD:$REPO_ROOT/bin:$PATH"
+lark-cue benchmark run --no-openclaw --cases ../seed/eval-cases.json --verbose
 ```
 
-The benchmark uses an isolated temporary evaluation log, runs real commands, and returns `0` only when every case passes. The FlowOps case runs `flowctl init` as lightweight setup inside the disposable workspace. Use `--no-openclaw` for a card-only benchmark run. Run `examples/flowops-airflow/scripts/reset-demo` when you need a full reset.
+The benchmark uses an isolated temporary evaluation log and returns `0` only when every case passes. Use `--no-openclaw` for card-only scoring; omit it when you want the default OpenClaw preflight/handoff path. Run `examples/flowops-airflow/scripts/reset-demo` when you need a full reset before another recording.
+
+Expected healthy summary:
+
+```text
+cases: 10/10 passed
+expected-source hit rate: 10/10
+```
 
 ## Evaluation
 
