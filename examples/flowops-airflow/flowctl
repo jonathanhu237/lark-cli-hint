@@ -26,6 +26,8 @@ Usage:
   flowctl capacity reset [dag_id]
   flowctl dataset backfill <dag_id> --date <yyyy-mm-dd>
   flowctl dataset reset [dag_id]
+  flowctl feature override <dag_id> --flag <id> --cohort <name>
+  flowctl feature reset [dag_id]
   flowctl secrets renew <dag_id> --secret <name> --epoch <epoch>
   flowctl secrets reset [dag_id]
   flowctl source refresh <dag_id> --alias <missing=actual>
@@ -40,6 +42,7 @@ Commands:
   check         Run the real Airflow import-error check for a DAG.
   capacity      Manage local FlowOps capacity state for the demo.
   dataset       Manage local FlowOps dataset freshness state for the demo.
+  feature       Manage local FlowOps feature gate state for the demo.
   secrets       Manage local FlowOps secret state for the demo.
   source        Manage local FlowOps source bindings for the demo.
   airflow       Pass arguments to the real Airflow CLI in Docker Compose.
@@ -176,6 +179,24 @@ ERROR
   return 1
 }
 
+check_churn_features() {
+  if marker_present "churn_features_gate"; then
+    echo "FlowOps feature gate OK: churn_features EXP-883 cohort=cohort_v3"
+    echo "churn_features check passed"
+    return 0
+  fi
+
+  cat >&2 <<'ERROR'
+FlowOpsExperimentGateError: churn_features cohort resolver rejected rollout
+gate: EXP-883
+requested cohort: cohort_v2
+message: model rollout mapping not found for current experiment cohort
+owner: growth-model
+hint: search internal FlowOps group for rollout gate or cohort resolver
+ERROR
+  return 1
+}
+
 check_billing_export() {
   if source_alias_present "billing_export_2026" "customer_segment=segment"; then
     echo "FlowOps source binding OK: billing_export_2026 customer_segment -> segment"
@@ -191,6 +212,58 @@ owner: billing-platform
 hint: search internal FlowOps group for billing_export_2026 customer_segment source refresh
 ERROR
   return 1
+}
+
+override_feature() {
+  local dag_id="${1:-}"
+  shift || true
+  local flag=""
+  local cohort=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --flag)
+        if [[ "$#" -lt 2 ]]; then
+          echo "flowctl feature override: --flag requires an id" >&2
+          exit 2
+        fi
+        flag="$2"
+        shift 2
+        ;;
+      --cohort)
+        if [[ "$#" -lt 2 ]]; then
+          echo "flowctl feature override: --cohort requires a name" >&2
+          exit 2
+        fi
+        cohort="$2"
+        shift 2
+        ;;
+      *)
+        echo "flowctl feature override: unknown argument: $1" >&2
+        exit 2
+        ;;
+    esac
+  done
+  if [[ "${dag_id}" != "churn_features" || "${flag}" != "EXP-883" || "${cohort}" != "cohort_v3" ]]; then
+    echo "FlowOpsExperimentGateError: no test feature override matches ${dag_id} ${flag} ${cohort}" >&2
+    exit 1
+  fi
+  mark_scenario "churn_features_gate"
+  echo "FlowOps feature override applied: ${dag_id} flag=${flag} cohort=${cohort}"
+  echo "Next: flowctl check ${dag_id}"
+}
+
+reset_feature() {
+  local dag_id="${1:-}"
+  case "${dag_id}" in
+    ""|"churn_features")
+      reset_marker "churn_features_gate"
+      echo "FlowOps feature state reset: ${dag_id:-all}"
+      ;;
+    *)
+      echo "flowctl feature reset: unknown demo dag ${dag_id}" >&2
+      exit 2
+      ;;
+  esac
 }
 
 bump_capacity() {
@@ -415,6 +488,9 @@ case "${command}" in
       inventory_snapshot)
         check_inventory_snapshot
         ;;
+      churn_features)
+        check_churn_features
+        ;;
       *)
         run_airflow "dags list-import-errors"
         run_airflow "dags show ${dag_id}"
@@ -453,6 +529,24 @@ case "${command}" in
       *)
         echo "Usage: flowctl dataset backfill <dag_id> --date <yyyy-mm-dd>" >&2
         echo "       flowctl dataset reset [dag_id]" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  feature)
+    subcommand="${2:-}"
+    case "${subcommand}" in
+      override)
+        shift 2
+        override_feature "$@"
+        ;;
+      reset)
+        shift 2
+        reset_feature "$@"
+        ;;
+      *)
+        echo "Usage: flowctl feature override <dag_id> --flag <id> --cohort <name>" >&2
+        echo "       flowctl feature reset [dag_id]" >&2
         exit 2
         ;;
     esac

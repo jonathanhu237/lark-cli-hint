@@ -20,13 +20,14 @@ type File struct {
 }
 
 type Case struct {
-	ID              string     `json:"id"`
-	Command         []string   `json:"command"`
-	Setup           [][]string `json:"setup,omitempty"`
-	Teardown        [][]string `json:"teardown,omitempty"`
-	ExpectFailure   bool       `json:"expect_failure"`
-	ExpectedSources []string   `json:"expected_sources"`
-	MinExpectedHits int        `json:"min_expected_hits"`
+	ID                    string     `json:"id"`
+	Command               []string   `json:"command"`
+	Setup                 [][]string `json:"setup,omitempty"`
+	Teardown              [][]string `json:"teardown,omitempty"`
+	ExpectFailure         bool       `json:"expect_failure"`
+	ExpectedSources       []string   `json:"expected_sources"`
+	ExpectedEvidenceTerms []string   `json:"expected_evidence_terms,omitempty"`
+	MinExpectedHits       int        `json:"min_expected_hits"`
 }
 
 type Observation struct {
@@ -53,6 +54,7 @@ type CaseResult struct {
 	ExpectedCitationHits int
 	TotalCitations       int
 	MatchedSources       []string
+	MatchedEvidenceTerms []string
 	CommandOutput        string
 	SetupOutput          string
 	TeardownOutput       string
@@ -125,6 +127,12 @@ func normalizeAndValidate(cases []Case) ([]Case, error) {
 			c.ExpectedSources[j] = strings.TrimSpace(source)
 			if c.ExpectedSources[j] == "" {
 				return nil, fmt.Errorf("case %q: expected_sources[%d] is empty", c.ID, j)
+			}
+		}
+		for j, term := range c.ExpectedEvidenceTerms {
+			c.ExpectedEvidenceTerms[j] = strings.TrimSpace(term)
+			if c.ExpectedEvidenceTerms[j] == "" {
+				return nil, fmt.Errorf("case %q: expected_evidence_terms[%d] is empty", c.ID, j)
 			}
 		}
 		if c.MinExpectedHits == 0 {
@@ -207,6 +215,7 @@ func ScoreCase(c Case, observation Observation) CaseResult {
 	if cue == nil {
 		result.Failures = append(result.Failures, "no scored card was available")
 	}
+	sourceCorpus := evidenceCorpus(result.CitedTitles, cue)
 
 	expectedSet := makeSet(c.ExpectedSources)
 	matchedSet := map[string]bool{}
@@ -225,8 +234,33 @@ func ScoreCase(c Case, observation Observation) CaseResult {
 	if result.ExpectedHitCount < c.MinExpectedHits {
 		result.Failures = append(result.Failures, fmt.Sprintf("expected source hits %d below minimum %d", result.ExpectedHitCount, c.MinExpectedHits))
 	}
+	for _, term := range c.ExpectedEvidenceTerms {
+		if strings.Contains(sourceCorpus, strings.ToLower(term)) {
+			result.MatchedEvidenceTerms = append(result.MatchedEvidenceTerms, term)
+			continue
+		}
+		result.Failures = append(result.Failures, fmt.Sprintf("expected evidence term %q was not present in cited sources", term))
+	}
 	result.Passed = len(result.Failures) == 0
 	return result
+}
+
+func evidenceCorpus(labels []string, cue *eval.Record) string {
+	var parts []string
+	parts = append(parts, labels...)
+	if cue != nil {
+		for _, source := range cue.Sources {
+			parts = append(parts,
+				source.Title,
+				source.ID,
+				source.ChatName,
+				source.Sender,
+				source.Timestamp,
+				source.Summary,
+			)
+		}
+	}
+	return strings.ToLower(strings.Join(parts, "\n"))
 }
 
 func benchmarkSourceLabel(source card.Citation) string {
@@ -311,6 +345,9 @@ func RenderSummary(summary Summary) string {
 		fmt.Fprintf(&b, "- cited: %s\n", renderList(result.CitedTitles))
 		fmt.Fprintf(&b, "- planner: %s\n", result.PlannerRetrieve)
 		fmt.Fprintf(&b, "- queries: %d\n", result.QueryCount)
+		if len(result.Case.ExpectedEvidenceTerms) > 0 {
+			fmt.Fprintf(&b, "- expected evidence terms: %s\n", strings.Join(result.Case.ExpectedEvidenceTerms, ", "))
+		}
 		if len(result.Failures) > 0 {
 			fmt.Fprintf(&b, "- failures: %s\n", strings.Join(result.Failures, "; "))
 		}
@@ -357,6 +394,9 @@ func RenderSummaryStyled(summary Summary, width int) string {
 		fmt.Fprintf(&b, "  expected: %s\n", renderList(result.Case.ExpectedSources))
 		fmt.Fprintf(&b, "  cited: %s\n", renderList(result.CitedTitles))
 		fmt.Fprintf(&b, "  planner: %s, queries: %d\n", result.PlannerRetrieve, result.QueryCount)
+		if len(result.Case.ExpectedEvidenceTerms) > 0 {
+			fmt.Fprintf(&b, "  expected evidence terms: %s\n", strings.Join(result.Case.ExpectedEvidenceTerms, ", "))
+		}
 		if len(result.Failures) > 0 {
 			fmt.Fprintf(&b, "  failures: %s\n", strings.Join(result.Failures, "; "))
 		}

@@ -54,6 +54,11 @@ func TestLoadCasesRejectsInvalidEntries(t *testing.T) {
 			want: "expected_sources",
 		},
 		{
+			name: "empty expected evidence term",
+			body: `{"cases":[{"id":"a","command":["echo","x"],"expected_sources":["Guide"],"expected_evidence_terms":[""]}]}`,
+			want: "expected_evidence_terms",
+		},
+		{
 			name: "min hits too high",
 			body: `{"cases":[{"id":"a","command":["echo","x"],"expected_sources":["Guide"],"min_expected_hits":2}]}`,
 			want: "min_expected_hits",
@@ -101,8 +106,8 @@ func TestFlowOpsEvalCasesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCases FlowOps eval cases error: %v", err)
 	}
-	if len(cases) != 5 {
-		t.Fatalf("FlowOps cases len = %d, want 5", len(cases))
+	if len(cases) != 6 {
+		t.Fatalf("FlowOps cases len = %d, want 6", len(cases))
 	}
 	got := cases[0]
 	if got.Command[0] != "flowctl" || !got.ExpectFailure || got.MinExpectedHits != 1 {
@@ -123,6 +128,10 @@ func TestFlowOpsEvalCasesLoad(t *testing.T) {
 	capacityCase := cases[4]
 	if capacityCase.ID != "flowops-inventory-snapshot-capacity" || capacityCase.Command[2] != "inventory_snapshot" {
 		t.Fatalf("unexpected FlowOps capacity case: %+v", capacityCase)
+	}
+	featureCase := cases[5]
+	if featureCase.ID != "flowops-churn-features-experiment-gate" || featureCase.Command[2] != "churn_features" {
+		t.Fatalf("unexpected FlowOps feature case: %+v", featureCase)
 	}
 }
 
@@ -198,6 +207,42 @@ func TestScoreCaseMatchesIMChatName(t *testing.T) {
 	})
 	if !result.Passed || !containsJoined(result.MatchedSources, "星桥科技 FlowOps 排障演示群") {
 		t.Fatalf("result = %+v, want IM chat source match", result)
+	}
+}
+
+func TestScoreCaseRequiresExpectedEvidenceTerms(t *testing.T) {
+	c := Case{
+		ID:                    "flowops-im",
+		Command:               []string{"flowctl", "check", "churn_features"},
+		ExpectFailure:         true,
+		ExpectedSources:       []string{"星桥科技 FlowOps 排障演示群"},
+		ExpectedEvidenceTerms: []string{"EXP-883", "cohort_v3"},
+		MinExpectedHits:       1,
+	}
+	result := ScoreCase(c, Observation{
+		CommandExitCode: 1,
+		CueRecords: []eval.Record{{
+			Type: "cue",
+			Sources: []card.Citation{{
+				Type:     "im",
+				ChatName: "星桥科技 FlowOps 排障演示群",
+				Summary:  "churn_features 要走 EXP-883 override 到 cohort_v3",
+			}},
+		}},
+	})
+	if !result.Passed || len(result.MatchedEvidenceTerms) != 2 {
+		t.Fatalf("result = %+v, want evidence term match", result)
+	}
+
+	missing := ScoreCase(c, Observation{
+		CommandExitCode: 1,
+		CueRecords: []eval.Record{{
+			Type:    "cue",
+			Sources: []card.Citation{{Type: "im", ChatName: "星桥科技 FlowOps 排障演示群", Summary: "unrelated message"}},
+		}},
+	})
+	if missing.Passed || !containsJoined(missing.Failures, "cohort_v3") {
+		t.Fatalf("missing result = %+v, want failed evidence term", missing)
 	}
 }
 
