@@ -5,8 +5,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-
-	"lark-cue/internal/runner"
 )
 
 func RenderResult(result Result, wrappedExitCode int) string {
@@ -14,19 +12,21 @@ func RenderResult(result Result, wrappedExitCode int) string {
 	b.WriteString("OpenClaw result\n")
 	b.WriteString("Status\n")
 	b.WriteString(resultStatus(result) + "\n\n")
+
+	for _, section := range outputSections(result) {
+		b.WriteString(section.title + "\n")
+		b.WriteString(section.body + "\n\n")
+	}
+
 	b.WriteString("Details\n")
 	fmt.Fprintf(&b, "- agent: %s\n", DefaultAgent)
-	fmt.Fprintf(&b, "- command: %s\n", runner.CommandString(result.Command))
 	fmt.Fprintf(&b, "- OpenClaw exit code: %d\n", result.ExitCode)
 	fmt.Fprintf(&b, "- duration: %s\n", formatMillis(result.LatencyMS))
 	fmt.Fprintf(&b, "- wrapped command exit preserved: %d\n", wrappedExitCode)
 	if strings.TrimSpace(result.Error) != "" {
 		fmt.Fprintf(&b, "- error: %s\n", strings.TrimSpace(result.Error))
 	}
-	if excerpt := outputExcerpt(result.Output, 8); excerpt != "" {
-		b.WriteString("\nOutput excerpt\n")
-		b.WriteString(excerpt + "\n")
-	}
+
 	b.WriteString("\nNext\n")
 	b.WriteString(nextGuidance(result))
 	b.WriteByte('\n')
@@ -55,7 +55,6 @@ func RenderResultStyled(result Result, wrappedExitCode int, width int) string {
 
 	details := []string{
 		"agent: " + DefaultAgent,
-		"command: " + runner.CommandString(result.Command),
 		fmt.Sprintf("OpenClaw exit code: %d", result.ExitCode),
 		"duration: " + formatMillis(result.LatencyMS),
 		fmt.Sprintf("wrapped command exit preserved: %d", wrappedExitCode),
@@ -67,11 +66,11 @@ func RenderResultStyled(result Result, wrappedExitCode int, width int) string {
 	sections := []string{
 		title.Render("OpenClaw result"),
 		renderKV(label, body, "Status", resultStatus(result)),
-		renderKV(label, body, "Details", strings.Join(details, "\n")),
 	}
-	if excerpt := outputExcerpt(result.Output, 8); excerpt != "" {
-		sections = append(sections, renderKV(label, body, "Output excerpt", excerpt))
+	for _, section := range outputSections(result) {
+		sections = append(sections, renderKV(label, body, section.title, section.body))
 	}
+	sections = append(sections, renderKV(label, body, "Details", strings.Join(details, "\n")))
 	sections = append(sections, renderKV(label, body, "Next", nextGuidance(result)))
 	return box.Render(strings.Join(sections, "\n\n")) + "\n"
 }
@@ -90,27 +89,126 @@ func resultStatus(result Result) string {
 func nextGuidance(result Result) string {
 	switch {
 	case result.Succeeded:
-		return "Review the OpenClaw output above. If verification was not completed there, rerun the failed command or continue in the OpenClaw session."
+		return "Review the OpenClaw summary above. If verification was not completed, rerun the failed command or continue in the OpenClaw session."
 	case result.TimedOut:
 		return "OpenClaw did not finish within the timeout. Continue in the OpenClaw session or rerun with a narrower failure context."
 	default:
-		return "Review the OpenClaw error/output above. The original command exit code is preserved so the shell still reflects the failed workflow."
+		return "Review the OpenClaw error and short output excerpt above. The original command exit code is preserved so the shell still reflects the failed workflow."
 	}
 }
 
+type resultSection struct {
+	title string
+	body  string
+}
+
+func outputSections(result Result) []resultSection {
+	named := extractNamedOutputSections(result.Output)
+	if len(named) > 0 {
+		return named
+	}
+	excerptTitle := "Summary"
+	if !result.Succeeded {
+		excerptTitle = "Output excerpt"
+	}
+	if excerpt := outputExcerpt(result.Output, 6); excerpt != "" {
+		return []resultSection{{title: excerptTitle, body: excerpt}}
+	}
+	return nil
+}
+
+func extractNamedOutputSections(output string) []resultSection {
+	lines := cleanOutputLines(output)
+	if len(lines) == 0 {
+		return nil
+	}
+	labels := map[string]string{
+		"what i found":   "Findings",
+		"what i changed": "Changes",
+		"verification":   "Verification",
+		"summary":        "Summary",
+		"result":         "Result",
+	}
+	order := []string{"Findings", "Changes", "Verification", "Summary", "Result"}
+	values := make(map[string][]string)
+	var current string
+	for _, line := range lines {
+		key := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(line), ":"))
+		if label, ok := labels[key]; ok {
+			current = label
+			continue
+		}
+		if current == "" {
+			continue
+		}
+		values[current] = appendLimited(values[current], line, 5)
+	}
+
+	var sections []resultSection
+	for _, label := range order {
+		lines := values[label]
+		if len(lines) == 0 {
+			continue
+		}
+		sections = append(sections, resultSection{
+			title: label,
+			body:  strings.Join(lines, "\n"),
+		})
+	}
+	return sections
+}
+
 func outputExcerpt(output string, maxLines int) string {
-	output = strings.TrimSpace(output)
-	if output == "" || maxLines <= 0 {
+	lines := cleanOutputLines(output)
+	if len(lines) == 0 || maxLines <= 0 {
 		return ""
 	}
-	lines := strings.Split(output, "\n")
 	if len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
 	}
-	for i, line := range lines {
-		lines[i] = strings.TrimRight(line, " \t")
-	}
 	return strings.Join(lines, "\n")
+}
+
+func cleanOutputLines(output string) []string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return nil
+	}
+	rawLines := strings.Split(output, "\n")
+	lines := make([]string, 0, len(rawLines))
+	for _, line := range rawLines {
+		line = strings.TrimRight(line, " \t")
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[plugins]") {
+			continue
+		}
+		lines = append(lines, clipLine(line, 140))
+	}
+	return lines
+}
+
+func appendLimited(lines []string, line string, max int) []string {
+	if len(lines) >= max {
+		return lines
+	}
+	return append(lines, line)
+}
+
+func clipLine(line string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(line)
+	if len(runes) <= max {
+		return line
+	}
+	if max <= 3 {
+		return string(runes[:max])
+	}
+	return string(runes[:max-3]) + "..."
 }
 
 func statusColor(result Result) lipgloss.Color {

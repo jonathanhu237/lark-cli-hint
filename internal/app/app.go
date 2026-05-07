@@ -360,7 +360,7 @@ func runCommand(ctx context.Context, cfg config.Config, opts runOptions, stdin i
 			Evidence:        selected,
 		})
 		fmt.Fprintf(cueOutput, "\nlark-cue: invoking OpenClaw agent %s...\n", openclaw.DefaultAgent)
-		openClawResult := openClaw.Invoke(ctx, task, cueOutput)
+		openClawResult := openClaw.Invoke(ctx, task, io.Discard)
 		kcard.OpenClaw = card.OpenClawHandoff{
 			Attempted: true,
 			Succeeded: openClawResult.Succeeded,

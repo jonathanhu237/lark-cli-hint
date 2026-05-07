@@ -163,12 +163,15 @@ func TestRenderResultShowsStatusDetailsAndOutputExcerpt(t *testing.T) {
 		"OpenClaw exit code: 0",
 		"duration: 1.2s",
 		"wrapped command exit preserved: 1",
-		"Output excerpt",
+		"Summary",
 		"line3",
 		"Next",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered result missing %q:\n%s", want, rendered)
 		}
+	}
+	if strings.Contains(rendered, "command: openclaw agent") {
+		t.Fatalf("rendered result should not expose the full OpenClaw command:\n%s", rendered)
 	}
 }

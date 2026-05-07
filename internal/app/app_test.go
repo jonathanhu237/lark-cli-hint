@@ -321,10 +321,12 @@ func TestRunInvokesOpenClawAfterCardAndPreservesExitCode(t *testing.T) {
 		t.Fatalf("OpenClaw calls = preflight %v invoke %v", fakeOpenClaw.preflightCalled, fakeOpenClaw.invokeCalled)
 	}
 	cardAt := strings.Index(stderr.String(), "lark-cue knowledge card")
-	openClawAt := strings.Index(stderr.String(), "openclaw stdout")
 	resultAt := strings.Index(stderr.String(), "OpenClaw result")
-	if cardAt < 0 || openClawAt < 0 || resultAt < 0 || cardAt > openClawAt || openClawAt > resultAt {
-		t.Fatalf("OpenClaw output should appear after card:\n%s", stderr.String())
+	if cardAt < 0 || resultAt < 0 || cardAt > resultAt {
+		t.Fatalf("OpenClaw result should appear after card:\n%s", stderr.String())
+	}
+	if rawAt := strings.Index(stderr.String(), "openclaw stdout\nopenclaw stderr"); rawAt >= 0 && rawAt < resultAt {
+		t.Fatalf("raw OpenClaw output should not be streamed before the result card:\n%s", stderr.String())
 	}
 	for _, want := range []string{
 		"Working directory:",
